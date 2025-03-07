@@ -150,6 +150,7 @@ async fn main() -> Result<()> {
     // Stop the timer and close the notification
     let _ = timer_tx.send(());
     let _ = timer_handle.await?;
+    notification_handle.close();
     
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
