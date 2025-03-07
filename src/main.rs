@@ -81,31 +81,16 @@ async fn main() -> Result<()> {
     println!("- Run: echo x > {}", fifo_path);
     
     // Set up notification with action
-    let (tx, rx) = mpsc::channel();
     let notification_handle = Notification::new()
         .summary("Recording in progress")
-        .body("Click to stop recording or use keyboard/pipe")
+        .body("Recording in progress. Use Enter key or named pipe to stop.")
         .icon("audio-input-microphone")
         .timeout(0) // 0 means the notification won't time out
-        .action("default", "Stop Recording")
-        .hint(notify_rust::Hint::Resident(true))
         .show()?;
-        
-    // Set up a separate thread to listen for notification actions
-    let notification_thread = std::thread::spawn(move || {
-        // This will block until notification is clicked
-        for action in notify_rust::get_server().wait_for_action(notification_handle.id()) {
-            if action == "default" {
-                let _ = tx.send(());
-                break;
-            }
-        }
-    });
 
-    // Set up async readers for both input sources
+    // Set up async readers for input sources
     let (stdin_tx, mut stdin_rx) = tokio::sync::oneshot::channel();
     let (fifo_tx, mut fifo_rx) = tokio::sync::oneshot::channel();
-    let (notif_tx, mut notif_rx) = tokio::sync::oneshot::channel();
 
     // Spawn stdin reader
     tokio::spawn(async move {
@@ -116,17 +101,6 @@ async fn main() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    // Spawn notification watcher
-    tokio::spawn(async move {
-        // Wait for notification thread to complete (notification clicked)
-        let handle = tokio::task::spawn_blocking(move || {
-            notification_thread.join().unwrap();
-        });
-        
-        handle.await?;
-        notif_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send notification signal"))?;
-        Ok::<_, anyhow::Error>(())
-    });
 
     // Spawn fifo reader
     tokio::spawn(async move {
@@ -141,7 +115,6 @@ async fn main() -> Result<()> {
     match tokio::select! {
         _ = &mut stdin_rx => "Enter key",
         _ = &mut fifo_rx => "named pipe",
-        _ = &mut notif_rx => "notification click",
     } {
         source => println!("Stopped by {}", source),
     }
