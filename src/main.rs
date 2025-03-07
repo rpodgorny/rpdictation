@@ -8,6 +8,7 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
+use notify_rust::Notification;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -77,6 +78,14 @@ async fn main() -> Result<()> {
     println!("Recording... Stop with:");
     println!("- Press Enter, or");
     println!("- Run: echo x > {}", fifo_path);
+    
+    // Send notification
+    let notification = Notification::new()
+        .summary("Recording in progress")
+        .body("Press Enter or use named pipe to stop recording")
+        .icon("audio-input-microphone")
+        .timeout(0) // 0 means the notification won't time out
+        .show()?;
 
     // Set up async readers for both input sources
     let (stdin_tx, mut stdin_rx) = tokio::sync::oneshot::channel();
@@ -107,6 +116,9 @@ async fn main() -> Result<()> {
     } {
         source => println!("Stopped by {}", source),
     }
+    
+    // Close the notification
+    Notification::close(notification.id());
 
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
