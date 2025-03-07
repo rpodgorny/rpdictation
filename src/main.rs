@@ -88,6 +88,10 @@ async fn main() -> Result<()> {
         .timeout(0) // 0 means the notification won't time out
         .show()?;
 
+    notification_handle.on_close(|| {
+        println!("Notification closed");
+    });
+
     // Set up async readers for input sources
     let (stdin_tx, mut stdin_rx) = tokio::sync::oneshot::channel();
     let (fifo_tx, mut fifo_rx) = tokio::sync::oneshot::channel();
@@ -100,7 +104,6 @@ async fn main() -> Result<()> {
         stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
         Ok::<_, anyhow::Error>(())
     });
-
 
     // Spawn fifo reader
     tokio::spawn(async move {
@@ -120,7 +123,7 @@ async fn main() -> Result<()> {
     }
     
     // Close the notification
-    notification_handle.close();
+    //notification_handle.close();
 
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
@@ -163,7 +166,7 @@ async fn main() -> Result<()> {
         .await?;
 
     let result: serde_json::Value = response.json().await?;
-    
+
     if let Some(text) = result["text"].as_str() {
         println!("\nTranscription:");
         println!("{}", text);
@@ -175,13 +178,13 @@ async fn main() -> Result<()> {
                 .status()
                 .context("Failed to run wtype")?;
         }
-        
+
         // Calculate cost - $0.006 per minute
         let reader = hound::WavReader::open("recording.wav")?;
         let duration_seconds = reader.duration() as f64 / reader.spec().sample_rate as f64;
         let minutes = (duration_seconds / 60.0).ceil();
         let cost = minutes * 0.006;
-        
+
         println!("\nAudio duration: {:.1} seconds", duration_seconds);
         println!("Cost: ${:.4}", cost);
     } else {
