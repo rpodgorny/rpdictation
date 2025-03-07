@@ -8,7 +8,8 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
-use notify_rust::Notification;
+use notify_rust::{Notification, NotificationHandle};
+use std::sync::mpsc;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -79,17 +80,30 @@ async fn main() -> Result<()> {
     println!("- Press Enter, or");
     println!("- Run: echo x > {}", fifo_path);
     
-    // Send notification
-    let notification = Notification::new()
+    // Set up notification with action
+    let (tx, rx) = mpsc::channel();
+    let notification_handle = Notification::new()
         .summary("Recording in progress")
-        .body("Press Enter or use named pipe to stop recording")
+        .body("Click to stop recording or use keyboard/pipe")
         .icon("audio-input-microphone")
         .timeout(0) // 0 means the notification won't time out
-        .show()?;
+        .action("default", "Stop Recording")
+        .hint(notify_rust::Hint::Resident(true))
+        .show_and_wait(move |action| {
+            if action == "default" {
+                let _ = tx.send(());
+            }
+        })?;
+
+    // Spawn notification handler in separate thread
+    let notification_thread = std::thread::spawn(move || {
+        let _ = rx.recv(); // This will block until notification is clicked
+    });
 
     // Set up async readers for both input sources
     let (stdin_tx, mut stdin_rx) = tokio::sync::oneshot::channel();
     let (fifo_tx, mut fifo_rx) = tokio::sync::oneshot::channel();
+    let (notif_tx, mut notif_rx) = tokio::sync::oneshot::channel();
 
     // Spawn stdin reader
     tokio::spawn(async move {
@@ -97,6 +111,19 @@ async fn main() -> Result<()> {
         let mut buf = String::new();
         stdin.read_line(&mut buf).await?;
         stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
+        Ok::<_, anyhow::Error>(())
+    });
+
+    // Spawn notification watcher
+    let notif_handle = notification_handle.clone();
+    tokio::spawn(async move {
+        // Wait for notification thread to complete (notification clicked)
+        let handle = tokio::task::spawn_blocking(move || {
+            notification_thread.join().unwrap();
+        });
+        
+        handle.await?;
+        notif_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send notification signal"))?;
         Ok::<_, anyhow::Error>(())
     });
 
@@ -109,16 +136,17 @@ async fn main() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    // Wait for either input
+    // Wait for any input method
     match tokio::select! {
         _ = &mut stdin_rx => "Enter key",
         _ = &mut fifo_rx => "named pipe",
+        _ = &mut notif_rx => "notification click",
     } {
         source => println!("Stopped by {}", source),
     }
     
     // Close the notification
-    notification.close();
+    notification_handle.close();
 
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
