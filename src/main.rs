@@ -91,9 +91,7 @@ async fn main() -> Result<()> {
         .timeout(0) // 0 means the notification won't time out
         .show()?;
 
-    // Clone the notification handle so we can use it later
-    let notification_handle_for_close = notification_handle.clone();
-    
+    // Set up on_close handler
     notification_handle.on_close(|| {
         println!("Notification closed");
     });
@@ -150,10 +148,17 @@ async fn main() -> Result<()> {
         source => println!("Stopped by {}", source),
     }
     
-    // Stop the timer and close the notification
+    // Stop the timer
     let _ = timer_tx.send(());
     let _ = timer_handle.await?;
-    notification_handle_for_close.close();
+    
+    // Create a new notification to replace the old one
+    Notification::new()
+        .summary("Recording finished")
+        .body("Recording has been stopped")
+        .icon("audio-input-microphone")
+        .timeout(3000) // 3 seconds timeout
+        .show()?;
     
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
