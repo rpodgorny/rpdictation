@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
     }
     
     // Close the notification
-    Notification::close(notification.id());
+    notification.close();
 
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
