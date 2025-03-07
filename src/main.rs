@@ -10,6 +10,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
 use notify_rust::Notification;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -80,6 +81,9 @@ async fn main() -> Result<()> {
     println!("- Press Enter, or");
     println!("- Run: echo x > {}", fifo_path);
     
+    // Start recording timer
+    let start_time = Instant::now();
+    
     // Set up notification with action
     let notification_handle = Notification::new()
         .summary("Recording in progress")
@@ -90,6 +94,28 @@ async fn main() -> Result<()> {
 
     notification_handle.on_close(|| {
         println!("Notification closed");
+    });
+    
+    // Spawn a timer to display recording length
+    let (timer_tx, mut timer_rx) = tokio::sync::oneshot::channel();
+    let timer_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let elapsed = start_time.elapsed();
+                    let minutes = elapsed.as_secs() / 60;
+                    let seconds = elapsed.as_secs() % 60;
+                    print!("\rRecording length: {:02}:{:02}", minutes, seconds);
+                    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                }
+                _ = &mut timer_rx => {
+                    println!(); // Print a newline before exiting
+                    break;
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
     });
 
     // Set up async readers for input sources
@@ -122,9 +148,10 @@ async fn main() -> Result<()> {
         source => println!("Stopped by {}", source),
     }
     
-    // Close the notification
-    //notification_handle.close();
-
+    // Stop the timer and close the notification
+    let _ = timer_tx.send(());
+    timer_handle.await?;
+    
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
     
