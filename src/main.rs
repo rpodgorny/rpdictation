@@ -8,7 +8,7 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
-use notify_rust::{Notification, NotificationHandle};
+use notify_rust::Notification;
 use std::sync::mpsc;
 
 #[derive(Parser)]
@@ -89,15 +89,17 @@ async fn main() -> Result<()> {
         .timeout(0) // 0 means the notification won't time out
         .action("default", "Stop Recording")
         .hint(notify_rust::Hint::Resident(true))
-        .show_and_wait(move |action| {
+        .show()?;
+        
+    // Set up a separate thread to listen for notification actions
+    let notification_thread = std::thread::spawn(move || {
+        // This will block until notification is clicked
+        for action in notify_rust::get_server().wait_for_action(notification_handle.id()) {
             if action == "default" {
                 let _ = tx.send(());
+                break;
             }
-        })?;
-
-    // Spawn notification handler in separate thread
-    let notification_thread = std::thread::spawn(move || {
-        let _ = rx.recv(); // This will block until notification is clicked
+        }
     });
 
     // Set up async readers for both input sources
@@ -115,7 +117,6 @@ async fn main() -> Result<()> {
     });
 
     // Spawn notification watcher
-    let notif_handle = notification_handle.clone();
     tokio::spawn(async move {
         // Wait for notification thread to complete (notification clicked)
         let handle = tokio::task::spawn_blocking(move || {
