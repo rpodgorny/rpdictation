@@ -9,7 +9,6 @@ use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
 use notify_rust::Notification;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -150,7 +149,7 @@ async fn main() -> Result<()> {
     
     // Stop the timer and close the notification
     let _ = timer_tx.send(());
-    timer_handle.await?;
+    let _ = timer_handle.await?;
     
     // Clean up the pipe
     fs::remove_file(fifo_path)?;
