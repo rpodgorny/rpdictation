@@ -8,7 +8,7 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
-use notify_rust::Notification;
+use notify_rust::{Notification, NotificationHandle};
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -92,8 +92,11 @@ async fn main() -> Result<()> {
         .show()?;
 
     // Set up on_close handler
-    notification_handle.on_close(|| {
+    let notification_handle_clone = notification_handle.clone();
+    notification_handle.on_close(move || {
         println!("Notification closed");
+        // Prevent memory leaks by explicitly closing the notification
+        let _ = notification_handle_clone.close();
     });
     
     // Spawn a timer to display recording length
@@ -160,8 +163,8 @@ async fn main() -> Result<()> {
         .timeout(3000) // 3 seconds timeout
         .show()?;
     
-    // Clean up the pipe
-    fs::remove_file(fifo_path)?;
+    // Clean up the pipe - don't fail if it's already gone
+    let _ = fs::remove_file(fifo_path);
     
     // Stop recording and close file
     drop(stream);
@@ -180,6 +183,9 @@ async fn main() -> Result<()> {
     println!("File size: {:.1} MB", file_size as f64 / 1_048_576.0);
     println!("\nTranscribing...");
 
+    // Store duration for later use
+    let audio_duration = duration_seconds;
+
     // Send to Whisper API
     let client = reqwest::Client::new();
     let file_bytes = std::fs::read("recording.wav")?;
@@ -197,6 +203,7 @@ async fn main() -> Result<()> {
         .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
+        .timeout(Duration::from_secs(30))  // Add timeout to prevent hanging
         .send()
         .await?;
 
@@ -208,16 +215,19 @@ async fn main() -> Result<()> {
 
         if args.wtype {
             println!("\nTyping text using wtype...");
-            Command::new("wtype")
-                .arg(text)
-                .status()
-                .context("Failed to run wtype")?;
+            // Check if wtype is installed
+            if Command::new("which").arg("wtype").status().is_ok() {
+                Command::new("wtype")
+                    .arg(text)
+                    .status()
+                    .context("Failed to run wtype")?;
+            } else {
+                println!("wtype command not found. Please install it to use this feature.");
+            }
         }
 
         // Calculate cost - $0.006 per minute
-        let reader = hound::WavReader::open("recording.wav")?;
-        let duration_seconds = reader.duration() as f64 / reader.spec().sample_rate as f64;
-        let minutes = (duration_seconds / 60.0).ceil();
+        let minutes = (audio_duration / 60.0).ceil();
         let cost = minutes * 0.006;
 
         println!("\nAudio duration: {:.1} seconds", duration_seconds);
@@ -226,8 +236,8 @@ async fn main() -> Result<()> {
         println!("Failed to get transcription from response");
     }
 
-    // Clean up the recording file
-    std::fs::remove_file("recording.wav")?;
+    // Clean up the recording file - don't fail if it's already gone
+    let _ = std::fs::remove_file("recording.wav");
 
     Ok(())
 }
