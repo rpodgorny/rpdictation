@@ -8,7 +8,7 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
-use notify_rust::{Notification, NotificationHandle};
+use notify_rust::Notification;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -92,11 +92,9 @@ async fn main() -> Result<()> {
         .show()?;
 
     // Set up on_close handler
-    let notification_handle_clone = notification_handle.clone();
-    notification_handle.on_close(move || {
+    notification_handle.on_close(|| {
         println!("Notification closed");
-        // Prevent memory leaks by explicitly closing the notification
-        let _ = notification_handle_clone.close();
+        // No need to explicitly close the notification
     });
     
     // Spawn a timer to display recording length
