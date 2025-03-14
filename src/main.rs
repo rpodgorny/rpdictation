@@ -8,6 +8,7 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
+use tokio::sync::CancellationToken;
 use notify_rust::Notification;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,9 @@ const CHANNELS: u16 = 1;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    
+    // Create a cancellation token for coordinating tasks
+    let cancel_token = CancellationToken::new();
 
     // Initialize audio host and device
     let host = cpal::default_host();
@@ -134,21 +138,37 @@ async fn main() -> Result<()> {
     let (fifo_tx, mut fifo_rx) = tokio::sync::oneshot::channel();
 
     // Spawn stdin reader
-    tokio::spawn(async move {
-        let mut stdin = BufReader::new(tokio::io::stdin());
-        let mut buf = String::new();
-        stdin.read_line(&mut buf).await?;
-        stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
-        Ok::<_, anyhow::Error>(())
+    let stdin_handle = tokio::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            let mut stdin = BufReader::new(tokio::io::stdin());
+            let mut buf = String::new();
+            tokio::select! {
+                _ = stdin.read_line(&mut buf) => {
+                    stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
+                    cancel_token.cancel();
+                }
+                _ = cancel_token.cancelled() => {}
+            }
+            Ok::<_, anyhow::Error>(())
+        }
     });
 
     // Spawn fifo reader
-    tokio::spawn(async move {
-        let mut fifo = File::open(fifo_path).await?;
-        let mut buf = [0u8; 1];
-        fifo.read_exact(&mut buf).await?;
-        fifo_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send fifo signal"))?;
-        Ok::<_, anyhow::Error>(())
+    let fifo_handle = tokio::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            let mut fifo = File::open(fifo_path).await?;
+            let mut buf = [0u8; 1];
+            tokio::select! {
+                _ = fifo.read_exact(&mut buf) => {
+                    fifo_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send fifo signal"))?;
+                    cancel_token.cancel();
+                }
+                _ = cancel_token.cancelled() => {}
+            }
+            Ok::<_, anyhow::Error>(())
+        }
     });
 
     // Wait for any input method
@@ -159,6 +179,11 @@ async fn main() -> Result<()> {
     } {
         source => println!("Stopped by {}", source),
     }
+    
+    // Cancel any remaining tasks
+    cancel_token.cancel();
+    // Wait for both tasks to finish cleanly
+    let _ = tokio::join!(stdin_handle, fifo_handle);
     
     // Stop the timer
     let _ = timer_tx.send(());
