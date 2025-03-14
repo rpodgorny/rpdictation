@@ -78,24 +78,34 @@ async fn main() -> Result<()> {
 
     println!("Recording... Stop with:");
     println!("- Press Enter, or");
-    println!("- Run: echo x > {}", fifo_path);
+    println!("- Run: echo x > {}, or", fifo_path);
+    //println!("- Click the notification");
     
     // Start recording timer
     let start_time = Instant::now();
     
     // Set up notification with action
+    /*
     let notification_handle = Notification::new()
         .summary("Recording in progress")
-        .body("Recording in progress. Use Enter key or named pipe to stop.")
+        .body("Recording in progress. Click to stop, or use Enter key or named pipe.")
         .icon("audio-input-microphone")
         .timeout(0) // 0 means the notification won't time out
         .show()?;
 
+    // Create a channel for notification confirmation
+    let (notif_tx, mut notif_rx) = tokio::sync::oneshot::channel();
+    let notif_tx = Arc::new(Mutex::new(Some(notif_tx)));
+    
     // Set up on_close handler
-    notification_handle.on_close(|| {
+    let notif_tx_clone = Arc::clone(&notif_tx);
+    notification_handle.on_close(move || {
         println!("Notification closed");
-        // No need to explicitly close the notification
+        if let Some(tx) = notif_tx_clone.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
     });
+    */
     
     // Spawn a timer to display recording length
     let (timer_tx, mut timer_rx) = tokio::sync::oneshot::channel();
@@ -145,6 +155,7 @@ async fn main() -> Result<()> {
     match tokio::select! {
         _ = &mut stdin_rx => "Enter key",
         _ = &mut fifo_rx => "named pipe",
+        //_ = &mut notif_rx => "notification confirmation",
     } {
         source => println!("Stopped by {}", source),
     }
@@ -153,6 +164,7 @@ async fn main() -> Result<()> {
     let _ = timer_tx.send(());
     let _ = timer_handle.await?;
     
+    /*
     // Create a new notification to replace the old one
     Notification::new()
         .summary("Recording finished")
@@ -160,6 +172,7 @@ async fn main() -> Result<()> {
         .icon("audio-input-microphone")
         .timeout(3000) // 3 seconds timeout
         .show()?;
+    */
     
     // Clean up the pipe - don't fail if it's already gone
     let _ = fs::remove_file(fifo_path);
@@ -197,15 +210,24 @@ async fn main() -> Result<()> {
     let api_key = env::var("OPENAI_API_KEY")
         .context("OPENAI_API_KEY environment variable not set")?;
 
+    println!("Sending request to OpenAI API...");
     let response = client
         .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
-        .timeout(Duration::from_secs(30))  // Add timeout to prevent hanging
+        .timeout(Duration::from_secs(60))  // Increase timeout to 60 seconds
         .send()
-        .await?;
+        .await
+        .context("Failed to send request to OpenAI API")?;
+    
+    println!("Got response with status: {}", response.status());
+    if !response.status().is_success() {
+        let error_text = response.text().await?;
+        return Err(anyhow::anyhow!("API error: {}", error_text));
+    }
 
-    let result: serde_json::Value = response.json().await?;
+    let result: serde_json::Value = response.json().await
+        .context("Failed to parse API response as JSON")?;
 
     if let Some(text) = result["text"].as_str() {
         println!("\nTranscription:");
