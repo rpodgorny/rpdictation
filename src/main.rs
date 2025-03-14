@@ -8,8 +8,8 @@ use std::process::Command;
 use std::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncBufReadExt, BufReader};
-use tokio::sync::CancellationToken;
-use notify_rust::Notification;
+use tokio_util::sync::CancellationToken;
+// use notify_rust::Notification;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
