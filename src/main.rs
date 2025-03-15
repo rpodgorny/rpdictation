@@ -19,6 +19,10 @@ struct Args {
     /// Use wtype to type out the transcription
     #[arg(long)]
     wtype: bool,
+
+    /// OpenAI API key (overrides OPENAI_API_KEY environment variable)
+    #[arg(long)]
+    openai_api_key: Option<String>,
 }
 
 async fn main_async() -> Result<()> {
@@ -36,8 +40,10 @@ async fn main_async() -> Result<()> {
         }
     }
 
-    let api_key =
-        env::var("OPENAI_API_KEY").context("OPENAI_API_KEY environment variable not set")?;
+    let api_key = match &args.openai_api_key {
+        Some(key) => key.clone(),
+        None => env::var("OPENAI_API_KEY").context("OPENAI_API_KEY environment variable not set or --openai-api-key not provided")?
+    };
 
     // Initialize audio host and device
     let host = cpal::default_host();
