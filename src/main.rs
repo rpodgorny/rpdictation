@@ -6,8 +6,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
-// use notify_rust::Notification;
-use std::time::Duration;
 
 const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
@@ -102,7 +100,7 @@ async fn main_async() -> Result<()> {
     let timer_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => { break; }
@@ -210,18 +208,19 @@ async fn main_async() -> Result<()> {
 
     cancel_token.cancel();
 
-/*
-    stdin_rx.close();
-    fifo_rx.close();
-    notify_rx.close();
-*/
+    /*
+        stdin_rx.close();
+        fifo_rx.close();
+        notify_rx.close();
+    */
 
     println!("joining");
     //timer_handle.await??;
     //stdin_handle.await??;
     //fifo_handle.await??;
     //notify_handle.await??;
-    tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle).map_err(|_| anyhow::anyhow!("Failed to join"))?;
+    tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle)
+        .map_err(|_| anyhow::anyhow!("Failed to join"))?;
     println!("joined");
 
     tokio::fs::remove_file(FIFO_PATH).await?;
@@ -258,7 +257,7 @@ async fn main_async() -> Result<()> {
         .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
-        .timeout(Duration::from_secs(60)) // Increase timeout to 60 seconds
+        .timeout(std::time::Duration::from_secs(60)) // Increase timeout to 60 seconds
         .send()
         .await
         .context("Failed to send request to OpenAI API")?;
@@ -304,11 +303,13 @@ async fn main_async() -> Result<()> {
 }
 
 fn main() {
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(main_async()).unwrap();
     println!("rt shutdown");
-    rt.shutdown_background();  // TODO: fucking hack - this is not graceful shutdown
-    //rt.shutdown_timeout(std::time::Duration::from_secs(10));
+    rt.shutdown_background(); // TODO: fucking hack - this is not graceful shutdown
+                              //rt.shutdown_timeout(std::time::Duration::from_secs(10));
     println!("main exit");
 }
-
