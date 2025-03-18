@@ -1,6 +1,6 @@
 # RPDictation
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-GPL-blue.svg)
 
 RPDictation is a simple, efficient speech-to-text transcription tool for Linux that leverages OpenAI's Whisper API to provide accurate transcriptions directly from your microphone.
 
@@ -85,7 +85,7 @@ While recording, you can:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0) - see the LICENSE file for details.
 
 ## Acknowledgments
 
