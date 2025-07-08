@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
+const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
 const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
@@ -245,6 +246,12 @@ async fn main_async() -> Result<()> {
     println!("Recording length: {:.1} seconds", duration_seconds);
     println!("File size: {:.1} MB", file_size as f64 / 1_048_576.0);
     let audio_duration = duration_seconds;
+
+    if duration_seconds < MIN_RECORDING_DURATION_SECONDS {
+        println!("Recording too short ({:.1} seconds), discarding.", duration_seconds);
+        tokio::fs::remove_file(RECORDING_FILENAME).await?;
+        return Ok(());
+    }
 
     println!("\nTranscribing...");
 
