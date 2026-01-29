@@ -54,6 +54,8 @@ With language specification:
 ./rpdictation --provider google --language cs-CZ
 ```
 
+**Note:** The Google provider requires explicit language specification and does not support automatic language detection. If you need automatic language detection, use the OpenAI provider which includes this capability.
+
 ### Basic usage with OpenAI
 
 Using environment variable:
