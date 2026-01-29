@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
 
 const SAMPLE_RATE: u32 = 16000;
@@ -29,21 +29,22 @@ struct Args {
 async fn main_async() -> Result<()> {
     let args = Args::parse();
 
-    if args.wtype {
-        if tokio::process::Command::new("which")
+    if args.wtype
+        && tokio::process::Command::new("which")
             .arg("wtype")
             .status()
             .await
             .is_err()
-        {
-            println!("wtype command not found. Please install it to use this feature.");
-            return Ok(());
-        }
+    {
+        println!("wtype command not found. Please install it to use this feature.");
+        return Ok(());
     }
 
     let api_key = match &args.openai_api_key {
         Some(key) => key.clone(),
-        None => env::var("OPENAI_API_KEY").context("OPENAI_API_KEY environment variable not set or --openai-api-key not provided")?
+        None => env::var("OPENAI_API_KEY").context(
+            "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
+        )?,
     };
 
     // Initialize audio host and device
@@ -205,13 +206,12 @@ async fn main_async() -> Result<()> {
         }
     });
 
-    match tokio::select! {
+    let source = tokio::select! {
         _ = &mut stdin_rx => "stdin",
         _ = &mut fifo_rx => "fifo",
         _ = &mut notify_rx => "notify",
-    } {
-        source => println!("Stopped by {}", source),
-    }
+    };
+    println!("Stopped by {}", source);
 
     cancel_token.cancel();
 
@@ -226,7 +226,7 @@ async fn main_async() -> Result<()> {
     //stdin_handle.await??;
     //fifo_handle.await??;
     //notify_handle.await??;
-    tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle)
+    let _ = tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle)
         .map_err(|_| anyhow::anyhow!("Failed to join"))?;
     println!("joined");
 
@@ -248,7 +248,10 @@ async fn main_async() -> Result<()> {
     let audio_duration = duration_seconds;
 
     if duration_seconds < MIN_RECORDING_DURATION_SECONDS {
-        println!("Recording too short ({:.1} seconds), discarding.", duration_seconds);
+        println!(
+            "Recording too short ({:.1} seconds), discarding.",
+            duration_seconds
+        );
         tokio::fs::remove_file(RECORDING_FILENAME).await?;
         return Ok(());
     }
