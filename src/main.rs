@@ -4,6 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::env;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncBufReadExt;
@@ -221,9 +222,13 @@ async fn main_async() -> Result<()> {
     let pid_path = get_pid_path();
     tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
 
+    let stdin_is_tty = std::io::stdin().is_terminal();
+
     println!("Recording... Stop with:");
     println!("- Run: rpdictation stop, or");
-    println!("- Press Enter, or");
+    if stdin_is_tty {
+        println!("- Press Enter, or");
+    }
     println!("- Run: echo x > {}, or", FIFO_PATH);
     println!("- Click the notification");
     println!();
@@ -258,16 +263,20 @@ async fn main_async() -> Result<()> {
     let stdin_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
+            if !stdin_is_tty {
+                // Not a TTY, just wait for cancellation
+                cancel_token.cancelled().await;
+                println!("stdin exit (not a tty)");
+                return Ok::<_, anyhow::Error>(());
+            }
+
             let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
             let mut buf = String::new();
-            //let mut stdin = tokio::io::stdin();
-            //let mut buf = [0u8; 1];
             tokio::select! {
                 _ = cancel_token.cancelled() => {}
                 _ = stdin.read_line(&mut buf) => {
                     stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
                 }
-                //_ = stdin.read(&mut buf) => {}
             }
             println!("stdin exit");
             Ok::<_, anyhow::Error>(())
