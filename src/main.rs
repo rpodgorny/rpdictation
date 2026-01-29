@@ -166,7 +166,7 @@ async fn main_async() -> Result<()> {
         }
     };
 
-    println!("Using provider: {}", provider.name());
+    eprintln!("Using provider: {}", provider.name());
 
     // Initialize audio host and device
     let host = cpal::default_host();
@@ -252,7 +252,7 @@ async fn main_async() -> Result<()> {
                     }
                 }
             }
-            println!("timer exit");
+            eprintln!("timer exit");
             Ok::<_, anyhow::Error>(())
         }
     });
@@ -264,7 +264,7 @@ async fn main_async() -> Result<()> {
             if !stdin_is_tty {
                 // Not a TTY, just wait for cancellation
                 cancel_token.cancelled().await;
-                println!("stdin exit (not a tty)");
+                eprintln!("stdin exit (not a tty)");
                 return Ok::<_, anyhow::Error>(());
             }
 
@@ -276,7 +276,7 @@ async fn main_async() -> Result<()> {
                     stdin_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send stdin signal"))?;
                 }
             }
-            println!("stdin exit");
+            eprintln!("stdin exit");
             Ok::<_, anyhow::Error>(())
         }
     });
@@ -285,7 +285,7 @@ async fn main_async() -> Result<()> {
     let fifo_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
-            println!("fifo open");
+            eprintln!("fifo open");
             tokio::select! {
                 _ = cancel_token.cancelled() => {}
                 _ = tokio::fs::File::open(FIFO_PATH) => {
@@ -295,7 +295,7 @@ async fn main_async() -> Result<()> {
             /*
             let mut fifo = File::open(FIFO_PATH).await?;
             let mut buf = [0u8; 1];
-            println!("fifo select");
+            eprintln!("fifo select");
             tokio::select! {
                 _ = cancel_token.cancelled() => {}
                 /*_ = fifo.read(&mut buf) => {
@@ -303,7 +303,7 @@ async fn main_async() -> Result<()> {
                 }*/
             }
             */
-            println!("fifo exit");
+            eprintln!("fifo exit");
             Ok::<_, anyhow::Error>(())
         }
     });
@@ -332,10 +332,10 @@ async fn main_async() -> Result<()> {
                 nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT)?;
                 proc_notify.wait().await?; // TODO: i have to keep this here - why?
             }
-            //println!("notify extra kill");
+            //eprintln!("notify extra kill");
             //proc_notify.kill().await?;
             //proc_notify.wait().await?;
-            println!("notify exit");
+            eprintln!("notify exit");
             Ok::<_, anyhow::Error>(())
         }
     });
@@ -352,7 +352,7 @@ async fn main_async() -> Result<()> {
                     signal_tx.send(()).ok();
                 }
             }
-            println!("signal exit");
+            eprintln!("signal exit");
             Ok::<_, anyhow::Error>(())
         }
     });
@@ -363,7 +363,7 @@ async fn main_async() -> Result<()> {
         _ = &mut notify_rx => "notify",
         _ = &mut signal_rx => "signal",
     };
-    println!("Stopped by {}", source);
+    eprintln!("Stopped by {}", source);
 
     cancel_token.cancel();
 
@@ -373,7 +373,7 @@ async fn main_async() -> Result<()> {
         notify_rx.close();
     */
 
-    println!("joining");
+    eprintln!("joining");
     //timer_handle.await??;
     //stdin_handle.await??;
     //fifo_handle.await??;
@@ -386,7 +386,7 @@ async fn main_async() -> Result<()> {
         signal_handle
     )
     .map_err(|_| anyhow::anyhow!("Failed to join"))?;
-    println!("joined");
+    eprintln!("joined");
 
     tokio::fs::remove_file(FIFO_PATH).await?;
     let _ = tokio::fs::remove_file(get_pid_path()).await;
@@ -407,7 +407,7 @@ async fn main_async() -> Result<()> {
     let audio_duration = duration_seconds;
 
     if duration_seconds < MIN_RECORDING_DURATION_SECONDS {
-        println!(
+        eprintln!(
             "Recording too short ({:.1} seconds), discarding.",
             duration_seconds
         );
@@ -443,7 +443,7 @@ async fn main_async() -> Result<()> {
         println!("Cost: ${:.4}", cost);
     }
 
-    println!("exit");
+    eprintln!("exit");
     Ok(())
 }
 
@@ -455,10 +455,10 @@ fn main() {
 
     let result = rt.block_on(main_async());
 
-    println!("rt shutdown");
+    eprintln!("rt shutdown");
     rt.shutdown_background(); // TODO: fucking hack - this is not graceful shutdown
                               //rt.shutdown_timeout(std::time::Duration::from_secs(10));
-    println!("main exit");
+    eprintln!("main exit");
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
