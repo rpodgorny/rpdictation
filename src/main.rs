@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncBufReadExt;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
 mod audio;
@@ -18,9 +21,45 @@ const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
 const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
 
+fn get_pid_path() -> PathBuf {
+    let uid = nix::unistd::getuid();
+    PathBuf::from(format!("/run/user/{}/rpdictation.pid", uid))
+}
+
+fn stop_recording() -> Result<()> {
+    let pid_path = get_pid_path();
+
+    // Check PID file exists
+    let pid_str = std::fs::read_to_string(&pid_path)
+        .context("No recording in progress (PID file not found)")?;
+    let pid = pid_str.trim().parse::<i32>()
+        .context("Invalid PID file")?;
+
+    // Check process exists and is rpdictation by reading /proc/<pid>/comm
+    let comm_path = format!("/proc/{}/comm", pid);
+    let comm = std::fs::read_to_string(&comm_path)
+        .context("No recording in progress (process not running)")?;
+
+    if comm.trim() != "rpdictation" {
+        // PID was reused by another process, clean up stale file
+        std::fs::remove_file(&pid_path)?;
+        anyhow::bail!("No recording in progress (stale PID, was reused by '{}')", comm.trim());
+    }
+
+    // Send signal
+    kill(Pid::from_raw(pid), Signal::SIGUSR1)
+        .context("Failed to send stop signal")?;
+
+    println!("Stop signal sent to recording process");
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Use wtype to type out the transcription
     #[arg(long)]
     wtype: bool,
@@ -42,8 +81,19 @@ struct Args {
     language: String,
 }
 
+#[derive(Subcommand)]
+enum Command {
+    /// Stop a running recording
+    Stop,
+}
+
 async fn main_async() -> Result<()> {
     let args = Args::parse();
+
+    // Handle stop command
+    if let Some(Command::Stop) = args.command {
+        return stop_recording();
+    }
 
     if args.wtype
         && tokio::process::Command::new("which")
@@ -127,7 +177,12 @@ async fn main_async() -> Result<()> {
     }
     nix::unistd::mkfifo(FIFO_PATH, nix::sys::stat::Mode::S_IRWXU)?;
 
+    // Write PID file
+    let pid_path = get_pid_path();
+    tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
+
     println!("Recording... Stop with:");
+    println!("- Run: rpdictation stop, or");
     println!("- Press Enter, or");
     println!("- Run: echo x > {}, or", FIFO_PATH);
     println!("- Click the notification");
@@ -238,10 +293,28 @@ async fn main_async() -> Result<()> {
         }
     });
 
+    let (signal_tx, mut signal_rx) = tokio::sync::oneshot::channel();
+    let signal_handle = tokio::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            let mut sig = signal(SignalKind::user_defined1())
+                .context("Failed to create signal handler")?;
+            tokio::select! {
+                _ = cancel_token.cancelled() => {}
+                _ = sig.recv() => {
+                    signal_tx.send(()).ok();
+                }
+            }
+            println!("signal exit");
+            Ok::<_, anyhow::Error>(())
+        }
+    });
+
     let source = tokio::select! {
         _ = &mut stdin_rx => "stdin",
         _ = &mut fifo_rx => "fifo",
         _ = &mut notify_rx => "notify",
+        _ = &mut signal_rx => "signal",
     };
     println!("Stopped by {}", source);
 
@@ -258,11 +331,12 @@ async fn main_async() -> Result<()> {
     //stdin_handle.await??;
     //fifo_handle.await??;
     //notify_handle.await??;
-    let _ = tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle)
+    let _ = tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle, signal_handle)
         .map_err(|_| anyhow::anyhow!("Failed to join"))?;
     println!("joined");
 
     tokio::fs::remove_file(FIFO_PATH).await?;
+    let _ = tokio::fs::remove_file(get_pid_path()).await;
 
     drop(stream);
     if let Some(writer) = writer.lock().unwrap().take() {
@@ -325,9 +399,15 @@ fn main() {
         .enable_all()
         .build()
         .unwrap();
-    rt.block_on(main_async()).unwrap();
+
+    let result = rt.block_on(main_async());
+
     println!("rt shutdown");
     rt.shutdown_background(); // TODO: fucking hack - this is not graceful shutdown
                               //rt.shutdown_timeout(std::time::Duration::from_secs(10));
     println!("main exit");
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+    }
 }
