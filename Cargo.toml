@@ -16,3 +16,5 @@ tokio-util = "0.7"
 clap = { version = "4.4", features = ["derive"] }
 nix = "0.26"
 dotenvy = "0.15.7"
+async-trait = "0.1"
+flacenc = "0.4"

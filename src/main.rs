@@ -7,6 +7,10 @@ use std::sync::{Arc, Mutex};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
 
+mod audio;
+mod providers;
+use providers::{google::GoogleProvider, openai::OpenAIProvider, TranscriptionProvider};
+
 const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
 const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
@@ -21,9 +25,21 @@ struct Args {
     #[arg(long)]
     wtype: bool,
 
+    /// Transcription provider: "openai" or "google"
+    #[arg(long, default_value = "openai")]
+    provider: String,
+
     /// OpenAI API key (overrides OPENAI_API_KEY environment variable)
     #[arg(long)]
     openai_api_key: Option<String>,
+
+    /// Google API key (optional, uses default Chromium key if not provided)
+    #[arg(long)]
+    google_api_key: Option<String>,
+
+    /// Language code for Google provider (e.g., en-us, cs-CZ)
+    #[arg(long, default_value = "en-us")]
+    language: String,
 }
 
 async fn main_async() -> Result<()> {
@@ -45,12 +61,23 @@ async fn main_async() -> Result<()> {
         dotenvy::dotenv()?;
     }
 
-    let api_key = match &args.openai_api_key {
-        Some(key) => key.clone(),
-        None => env::var("OPENAI_API_KEY").context(
-            "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
-        )?,
+    // Create the appropriate provider
+    let provider: Box<dyn TranscriptionProvider> = match args.provider.as_str() {
+        "google" => {
+            Box::new(GoogleProvider::new(args.google_api_key, args.language))
+        }
+        _ => {
+            let api_key = match &args.openai_api_key {
+                Some(key) => key.clone(),
+                None => env::var("OPENAI_API_KEY").context(
+                    "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
+                )?,
+            };
+            Box::new(OpenAIProvider::new(api_key))
+        }
     };
+
+    println!("Using provider: {}", provider.name());
 
     // Initialize audio host and device
     let host = cpal::default_host();
@@ -263,40 +290,10 @@ async fn main_async() -> Result<()> {
 
     println!("\nTranscribing...");
 
-    let client = reqwest::Client::new();
     let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
     tokio::fs::remove_file(RECORDING_FILENAME).await?;
-    let file_part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(RECORDING_FILENAME)
-        .mime_str("audio/wav")?;
-    let form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("model", "whisper-1");
 
-    println!("Sending request to OpenAI API...");
-    let response = client
-        .post("https://api.openai.com/v1/audio/transcriptions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .multipart(form)
-        .timeout(std::time::Duration::from_secs(60)) // Increase timeout to 60 seconds
-        .send()
-        .await
-        .context("Failed to send request to OpenAI API")?;
-
-    println!("Got response with status: {}", response.status());
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-        return Err(anyhow::anyhow!("API error: {}", error_text));
-    }
-
-    let result: serde_json::Value = response
-        .json()
-        .await
-        .context("Failed to parse API response as JSON")?;
-
-    let Some(text) = result["text"].as_str() else {
-        anyhow::bail!("Failed to get transcription from response");
-    };
+    let text = provider.transcribe(&file_bytes, SAMPLE_RATE).await?;
 
     println!();
     println!("Transcription:");
@@ -311,13 +308,13 @@ async fn main_async() -> Result<()> {
             .context("Failed to run wtype")?;
     }
 
-    // Calculate cost - $0.006 per minute
-    let minutes = (audio_duration / 60.0).ceil();
-    let cost = minutes * 0.006;
-
     println!();
     println!("Audio duration: {:.1} seconds", duration_seconds);
-    println!("Cost: ${:.4}", cost);
+    if let Some(cost_per_min) = provider.cost_per_minute() {
+        let minutes = (audio_duration / 60.0).ceil();
+        let cost = minutes * cost_per_min;
+        println!("Cost: ${:.4}", cost);
+    }
 
     println!("exit");
     Ok(())
