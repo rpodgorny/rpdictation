@@ -40,6 +40,11 @@ async fn main_async() -> Result<()> {
         return Ok(());
     }
 
+    if tokio::fs::try_exists(".env").await? {
+        println!("loading environment from .env");
+        dotenvy::dotenv()?;
+    }
+
     let api_key = match &args.openai_api_key {
         Some(key) => key.clone(),
         None => env::var("OPENAI_API_KEY").context(
