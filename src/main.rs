@@ -133,15 +133,19 @@ async fn main_async() -> Result<()> {
         }
     }
 
-    if args.wtype
-        && tokio::process::Command::new("which")
+    if args.wtype {
+        let wtype_available = tokio::process::Command::new("which")
             .arg("wtype")
+            .stdout(std::process::Stdio::null())
             .status()
             .await
-            .is_err()
-    {
-        println!("wtype command not found. Please install it to use this feature.");
-        return Ok(());
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !wtype_available {
+            eprintln!("wtype command not found. Please install it to use this feature.");
+            return Ok(());
+        }
     }
 
     if tokio::fs::try_exists(".env").await? {
