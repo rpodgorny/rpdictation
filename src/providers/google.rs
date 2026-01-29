@@ -39,7 +39,10 @@ impl TranscriptionProvider for GoogleProvider {
         println!("Sending request to Google Chromium Speech API...");
         let response = client
             .post(&url)
-            .header("Content-Type", format!("audio/x-flac; rate={}", sample_rate))
+            .header(
+                "Content-Type",
+                format!("audio/x-flac; rate={}", sample_rate),
+            )
             .body(flac_data)
             .timeout(std::time::Duration::from_secs(60))
             .send()
@@ -62,8 +65,8 @@ impl TranscriptionProvider for GoogleProvider {
                 continue;
             }
 
-            let json: serde_json::Value = serde_json::from_str(line)
-                .context("Failed to parse Google API response")?;
+            let json: serde_json::Value =
+                serde_json::from_str(line).context("Failed to parse Google API response")?;
 
             if let Some(result_array) = json["result"].as_array() {
                 if let Some(first_result) = result_array.first() {
@@ -78,7 +81,9 @@ impl TranscriptionProvider for GoogleProvider {
             }
         }
 
-        Err(anyhow::anyhow!("No transcription found in Google API response"))
+        Err(anyhow::anyhow!(
+            "No transcription found in Google API response"
+        ))
     }
 
     fn name(&self) -> &str {

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -32,8 +32,7 @@ fn stop_recording() -> Result<()> {
     // Check PID file exists
     let pid_str = std::fs::read_to_string(&pid_path)
         .context("No recording in progress (PID file not found)")?;
-    let pid = pid_str.trim().parse::<i32>()
-        .context("Invalid PID file")?;
+    let pid = pid_str.trim().parse::<i32>().context("Invalid PID file")?;
 
     // Check process exists and is rpdictation by reading /proc/<pid>/comm
     let comm_path = format!("/proc/{}/comm", pid);
@@ -43,15 +42,34 @@ fn stop_recording() -> Result<()> {
     if comm.trim() != "rpdictation" {
         // PID was reused by another process, clean up stale file
         std::fs::remove_file(&pid_path)?;
-        anyhow::bail!("No recording in progress (stale PID, was reused by '{}')", comm.trim());
+        anyhow::bail!(
+            "No recording in progress (stale PID, was reused by '{}')",
+            comm.trim()
+        );
     }
 
     // Send signal
-    kill(Pid::from_raw(pid), Signal::SIGUSR1)
-        .context("Failed to send stop signal")?;
+    kill(Pid::from_raw(pid), Signal::SIGUSR1).context("Failed to send stop signal")?;
 
     println!("Stop signal sent to recording process");
     Ok(())
+}
+
+fn is_instance_running() -> Option<i32> {
+    let pid_path = get_pid_path();
+    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
+    let pid: i32 = pid_str.trim().parse().ok()?;
+
+    let comm_path = format!("/proc/{}/comm", pid);
+    let comm = std::fs::read_to_string(&comm_path).ok()?;
+
+    if comm.trim() == "rpdictation" {
+        Some(pid)
+    } else {
+        // Stale PID file, clean it up
+        let _ = std::fs::remove_file(&pid_path);
+        None
+    }
 }
 
 #[derive(Parser)]
@@ -83,16 +101,36 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start recording (default if no command specified)
+    Start,
     /// Stop a running recording
     Stop,
+    /// Toggle recording (start if not running, stop if running)
+    Toggle,
 }
 
 async fn main_async() -> Result<()> {
     let args = Args::parse();
 
-    // Handle stop command
-    if let Some(Command::Stop) = args.command {
-        return stop_recording();
+    // Determine effective command (default to Start)
+    let command = args.command.unwrap_or(Command::Start);
+
+    match command {
+        Command::Stop => {
+            return stop_recording();
+        }
+        Command::Toggle => {
+            if is_instance_running().is_some() {
+                return stop_recording();
+            }
+            // Fall through to start recording
+        }
+        Command::Start => {
+            if let Some(pid) = is_instance_running() {
+                anyhow::bail!("Already running (pid {})", pid);
+            }
+            // Fall through to start recording
+        }
     }
 
     if args.wtype
@@ -113,9 +151,7 @@ async fn main_async() -> Result<()> {
 
     // Create the appropriate provider
     let provider: Box<dyn TranscriptionProvider> = match args.provider.as_str() {
-        "google" => {
-            Box::new(GoogleProvider::new(args.google_api_key, args.language))
-        }
+        "google" => Box::new(GoogleProvider::new(args.google_api_key, args.language)),
         _ => {
             let api_key = match &args.openai_api_key {
                 Some(key) => key.clone(),
@@ -297,8 +333,8 @@ async fn main_async() -> Result<()> {
     let signal_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
-            let mut sig = signal(SignalKind::user_defined1())
-                .context("Failed to create signal handler")?;
+            let mut sig =
+                signal(SignalKind::user_defined1()).context("Failed to create signal handler")?;
             tokio::select! {
                 _ = cancel_token.cancelled() => {}
                 _ = sig.recv() => {
@@ -331,8 +367,14 @@ async fn main_async() -> Result<()> {
     //stdin_handle.await??;
     //fifo_handle.await??;
     //notify_handle.await??;
-    let _ = tokio::try_join!(timer_handle, stdin_handle, fifo_handle, notify_handle, signal_handle)
-        .map_err(|_| anyhow::anyhow!("Failed to join"))?;
+    let _ = tokio::try_join!(
+        timer_handle,
+        stdin_handle,
+        fifo_handle,
+        notify_handle,
+        signal_handle
+    )
+    .map_err(|_| anyhow::anyhow!("Failed to join"))?;
     println!("joined");
 
     tokio::fs::remove_file(FIFO_PATH).await?;
