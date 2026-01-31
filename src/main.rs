@@ -313,6 +313,7 @@ async fn main_async() -> Result<()> {
         let mut proc_notify = tokio::process::Command::new("notify-send")
             .args([
                 "--hint=string:x-canonical-private-synchronous:rpdictation",
+                "--expire-time=0",
                 "--wait",
             ])
             .arg("Recording...")
