@@ -246,6 +246,17 @@ async fn main_async() -> Result<()> {
                         let elapsed = start_time.elapsed();
                         let minutes = elapsed.as_secs() / 60;
                         let seconds = elapsed.as_secs() % 60;
+
+                        // Update notification (fire-and-forget, uses same hint to replace)
+                        let _ = tokio::process::Command::new("notify-send")
+                            .args([
+                                "--hint=string:x-canonical-private-synchronous:rpdictation",
+                                "--expire-time=0",
+                            ])
+                            .arg(format!("Recording {:02}:{:02}", minutes, seconds))
+                            .spawn();
+
+                        // Keep terminal output
                         print!("\rRecording length: {:02}:{:02}", minutes, seconds);
                         std::io::Write::flush(&mut std::io::stdout()).unwrap();
                         //tokio::io::stdout().flush().await?;
@@ -315,8 +326,9 @@ async fn main_async() -> Result<()> {
                 "--hint=string:x-canonical-private-synchronous:rpdictation",
                 "--expire-time=0",
                 "--wait",
+                "--action=stop=Stop",
             ])
-            .arg("Recording...")
+            .arg("Recording 00:00")
             .spawn()
             .context("Failed to spawn notify-send")?;
 
