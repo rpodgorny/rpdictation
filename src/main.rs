@@ -22,6 +22,17 @@ const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
 const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
 
+fn send_notification(message: &str, expire: bool) {
+    let expire_time = if expire { "3000" } else { "0" };
+    let _ = std::process::Command::new("notify-send")
+        .args([
+            "--hint=string:x-canonical-private-synchronous:rpdictation",
+            &format!("--expire-time={}", expire_time),
+        ])
+        .arg(message)
+        .spawn();
+}
+
 fn get_pid_path() -> PathBuf {
     let uid = nix::unistd::getuid();
     PathBuf::from(format!("/run/user/{}/rpdictation.pid", uid))
@@ -405,11 +416,13 @@ async fn main_async() -> Result<()> {
     let _ = tokio::fs::remove_file(get_pid_path()).await;
 
     drop(stream);
+    send_notification("Saving recording...", false);
     if let Some(writer) = writer.lock().unwrap().take() {
         writer.finalize()?;
     }
     drop(writer); // TODO: not really needed
 
+    send_notification("Analyzing audio...", false);
     println!("Recording saved. Analyzing...");
 
     let file_size = tokio::fs::metadata(RECORDING_FILENAME).await?.len();
@@ -424,10 +437,12 @@ async fn main_async() -> Result<()> {
             "Recording too short ({:.1} seconds), discarding.",
             duration_seconds
         );
+        send_notification("Recording too short, discarding", true);
         tokio::fs::remove_file(RECORDING_FILENAME).await?;
         return Ok(());
     }
 
+    send_notification("Transcribing...", false);
     println!("\nTranscribing...");
 
     let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
@@ -440,13 +455,22 @@ async fn main_async() -> Result<()> {
     println!("{}", text);
 
     if args.wtype {
+        send_notification("Typing text...", false);
         println!("\nTyping text using wtype...");
         tokio::process::Command::new("wtype")
-            .arg(text)
+            .arg(&text)
             .status()
             .await
             .context("Failed to run wtype")?;
     }
+
+    // Show first ~50 chars of transcription in notification
+    let preview = if text.len() > 50 {
+        format!("{}...", &text[..50])
+    } else {
+        text.clone()
+    };
+    send_notification(&format!("Done: {}", preview), true);
 
     println!();
     println!("Audio duration: {:.1} seconds", duration_seconds);
