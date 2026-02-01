@@ -5,9 +5,9 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::env;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
@@ -41,22 +41,24 @@ fn get_pid_path() -> PathBuf {
     PathBuf::from(format!("/run/user/{}/rpdictation.pid", uid))
 }
 
-fn stop_recording() -> Result<()> {
+async fn stop_recording() -> Result<()> {
     let pid_path = get_pid_path();
 
     // Check PID file exists
-    let pid_str = std::fs::read_to_string(&pid_path)
+    let pid_str = tokio::fs::read_to_string(&pid_path)
+        .await
         .context("No recording in progress (PID file not found)")?;
     let pid = pid_str.trim().parse::<i32>().context("Invalid PID file")?;
 
     // Check process exists and is rpdictation by reading /proc/<pid>/comm
     let comm_path = format!("/proc/{}/comm", pid);
-    let comm = std::fs::read_to_string(&comm_path)
+    let comm = tokio::fs::read_to_string(&comm_path)
+        .await
         .context("No recording in progress (process not running)")?;
 
     if comm.trim() != "rpdictation" {
         // PID was reused by another process, clean up stale file
-        std::fs::remove_file(&pid_path)?;
+        tokio::fs::remove_file(&pid_path).await?;
         anyhow::bail!(
             "No recording in progress (stale PID, was reused by '{}')",
             comm.trim()
@@ -70,19 +72,19 @@ fn stop_recording() -> Result<()> {
     Ok(())
 }
 
-fn is_instance_running() -> Option<i32> {
+async fn is_instance_running() -> Option<i32> {
     let pid_path = get_pid_path();
-    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
+    let pid_str = tokio::fs::read_to_string(&pid_path).await.ok()?;
     let pid: i32 = pid_str.trim().parse().ok()?;
 
     let comm_path = format!("/proc/{}/comm", pid);
-    let comm = std::fs::read_to_string(&comm_path).ok()?;
+    let comm = tokio::fs::read_to_string(&comm_path).await.ok()?;
 
     if comm.trim() == "rpdictation" {
         Some(pid)
     } else {
         // Stale PID file, clean it up
-        let _ = std::fs::remove_file(&pid_path);
+        let _ = tokio::fs::remove_file(&pid_path).await;
         None
     }
 }
@@ -140,16 +142,16 @@ async fn main_async() -> Result<()> {
 
     match command {
         Command::Stop => {
-            return stop_recording();
+            return stop_recording().await;
         }
         Command::Toggle => {
-            if is_instance_running().is_some() {
-                return stop_recording();
+            if is_instance_running().await.is_some() {
+                return stop_recording().await;
             }
             // Fall through to start recording
         }
         Command::Start => {
-            if let Some(pid) = is_instance_running() {
+            if let Some(pid) = is_instance_running().await {
                 anyhow::bail!("Already running (pid {})", pid);
             }
             // Fall through to start recording
@@ -167,11 +169,6 @@ async fn main_async() -> Result<()> {
     {
         eprintln!("wtype command not found. Please install it to use this feature.");
         return Ok(());
-    }
-
-    if tokio::fs::try_exists(".env").await? {
-        println!("loading environment from .env");
-        dotenvy::dotenv()?;
     }
 
     // Create the appropriate provider
@@ -231,16 +228,19 @@ async fn main_async() -> Result<()> {
         .context("Failed to get default input device")?;
 
     // Prepare WAV writer
-    let path = Path::new(RECORDING_FILENAME);
+    let path = PathBuf::from(RECORDING_FILENAME);
     let spec = hound::WavSpec {
         channels: CHANNELS,
         sample_rate: SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let writer = Arc::new(Mutex::new(Some(
-        hound::WavWriter::create(path, spec).context("Failed to create WAV file")?,
-    )));
+    let wav_writer = tokio::task::spawn_blocking(move || {
+        hound::WavWriter::create(path, spec).context("Failed to create WAV file")
+    })
+    .await
+    .context("WAV writer task panicked")??;
+    let writer = Arc::new(Mutex::new(Some(wav_writer)));
 
     // Configure input stream
     let config = cpal::StreamConfig {
@@ -253,11 +253,13 @@ async fn main_async() -> Result<()> {
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _: &_| {
-            if let Some(writer) = &mut *writer_clone.lock().unwrap() {
-                for &sample in data {
-                    writer
-                        .write_sample((sample * i16::MAX as f32) as i16)
-                        .unwrap();
+            if let Ok(mut guard) = writer_clone.try_lock() {
+                if let Some(writer) = &mut *guard {
+                    for &sample in data {
+                        writer
+                            .write_sample((sample * i16::MAX as f32) as i16)
+                            .unwrap();
+                    }
                 }
             }
         },
@@ -314,8 +316,7 @@ async fn main_async() -> Result<()> {
 
                         // Keep terminal output
                         print!("\rRecording length: {:02}:{:02}", minutes, seconds);
-                        std::io::Write::flush(&mut std::io::stdout()).unwrap();
-                        //tokio::io::stdout().flush().await?;
+                        let _ = tokio::io::stdout().flush().await;
                     }
                 }
             }
@@ -462,8 +463,11 @@ async fn main_async() -> Result<()> {
 
     drop(stream);
     send_notification("Saving recording...", false).await;
-    if let Some(writer) = writer.lock().unwrap().take() {
-        writer.finalize()?;
+    let writer_to_finalize = writer.lock().unwrap().take();
+    if let Some(w) = writer_to_finalize {
+        tokio::task::spawn_blocking(move || w.finalize())
+            .await
+            .context("WAV writer finalize task panicked")??;
     }
     drop(writer); // TODO: not really needed
 
@@ -471,8 +475,13 @@ async fn main_async() -> Result<()> {
     println!("Recording saved. Analyzing...");
 
     let file_size = tokio::fs::metadata(RECORDING_FILENAME).await?.len();
-    let reader = hound::WavReader::open(RECORDING_FILENAME)?;
-    let duration_seconds = reader.duration() as f64 / reader.spec().sample_rate as f64;
+    let duration_seconds = tokio::task::spawn_blocking(|| {
+        let reader = hound::WavReader::open(RECORDING_FILENAME)?;
+        let duration = reader.duration() as f64 / reader.spec().sample_rate as f64;
+        Ok::<_, anyhow::Error>(duration)
+    })
+    .await
+    .context("WAV reader task panicked")??;
     println!("Recording length: {:.1} seconds", duration_seconds);
     println!("File size: {:.1} MB", file_size as f64 / 1_048_576.0);
     let audio_duration = duration_seconds;
@@ -581,6 +590,14 @@ async fn main_async() -> Result<()> {
 }
 
 fn main() {
+    // Load .env file before starting async runtime (blocking but only at startup)
+    if std::path::Path::new(".env").exists() {
+        println!("loading environment from .env");
+        if let Err(e) = dotenvy::dotenv() {
+            eprintln!("Warning: Failed to load .env file: {}", e);
+        }
+    }
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

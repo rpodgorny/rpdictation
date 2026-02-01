@@ -23,9 +23,14 @@ impl GoogleProvider {
 #[async_trait]
 impl TranscriptionProvider for GoogleProvider {
     async fn transcribe(&self, audio_data: &[u8], sample_rate: u32) -> Result<String> {
-        // Convert WAV to FLAC
+        // Convert WAV to FLAC (CPU-intensive, run in blocking thread)
         println!("Converting WAV to FLAC...");
-        let flac_data = crate::audio::wav_to_flac(audio_data, sample_rate)?;
+        let audio_data_owned = audio_data.to_vec();
+        let flac_data = tokio::task::spawn_blocking(move || {
+            crate::audio::wav_to_flac(&audio_data_owned, sample_rate)
+        })
+        .await
+        .context("FLAC encoding task panicked")??;
 
         // Send to Google API
         let client = reqwest::Client::new();
