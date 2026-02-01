@@ -12,7 +12,9 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
 mod audio;
+mod focus;
 mod providers;
+use focus::FocusProvider;
 use providers::{google::GoogleProvider, openai::OpenAIProvider, TranscriptionProvider};
 
 const SAMPLE_RATE: u32 = 16000;
@@ -109,6 +111,10 @@ struct Args {
     /// Language code for Google provider (e.g., en-us, cs-CZ)
     #[arg(long, default_value = "en-us")]
     language: String,
+
+    /// Track window focus and restore it before typing
+    #[arg(long)]
+    track_window: bool,
 }
 
 #[derive(Subcommand)]
@@ -178,6 +184,40 @@ async fn main_async() -> Result<()> {
     };
 
     eprintln!("Using provider: {}", provider.name());
+
+    // Initialize focus provider if tracking is enabled
+    let focus_provider: Option<Box<dyn FocusProvider>> = if args.track_window {
+        match focus::detect_focus_provider().await {
+            Some(fp) => {
+                eprintln!("Using focus provider: {}", fp.name());
+                Some(fp)
+            }
+            None => {
+                eprintln!("Warning: --track-window enabled but no compositor detected, focus tracking disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Capture focused window at recording start
+    let saved_window_id = if let Some(ref fp) = focus_provider {
+        match fp.get_focused_window().await {
+            Ok(wid) => {
+                if let Some(ref w) = wid {
+                    eprintln!("Captured window ID: {:?}", w);
+                }
+                wid
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to capture focused window: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Initialize audio host and device
     let host = cpal::default_host();
@@ -457,11 +497,61 @@ async fn main_async() -> Result<()> {
     if args.wtype {
         send_notification("Typing text...", false);
         println!("\nTyping text using wtype...");
+
+        // Handle focus tracking if enabled
+        let restore_window_id = if let (Some(ref fp), Some(ref saved_wid)) =
+            (&focus_provider, &saved_window_id)
+        {
+            // Get current focused window
+            let current_wid = fp.get_focused_window().await.ok().flatten();
+
+            if current_wid.as_ref() != Some(saved_wid) {
+                // Focus changed, need to switch back
+                eprintln!(
+                    "Focus changed from {:?} to {:?}, switching back",
+                    saved_wid, current_wid
+                );
+
+                // Try to focus the original window
+                match fp.set_focused_window(saved_wid).await {
+                    Ok(true) => {
+                        eprintln!("Switched focus to original window");
+                        // Remember current window for restoration after typing
+                        current_wid
+                    }
+                    Ok(false) => {
+                        eprintln!(
+                            "Warning: Failed to switch to original window (may be closed), typing into current"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Error switching focus: {}, typing into current", e);
+                        None
+                    }
+                }
+            } else {
+                // Focus unchanged, no need to restore
+                None
+            }
+        } else {
+            None
+        };
+
+        // Type the text
         tokio::process::Command::new("wtype")
             .arg(&text)
             .status()
             .await
             .context("Failed to run wtype")?;
+
+        // Restore focus to the window that was focused before we switched
+        if let (Some(ref fp), Some(ref restore_wid)) = (&focus_provider, &restore_window_id) {
+            eprintln!("Restoring focus to {:?}", restore_wid);
+            if let Err(e) = fp.set_focused_window(restore_wid).await {
+                eprintln!("Warning: Failed to restore focus: {}", e);
+            }
+        }
     }
 
     // Show first ~50 chars of transcription in notification
