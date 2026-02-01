@@ -15,6 +15,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
   - Send a command to a FIFO
   - Click a desktop notification
 - **Optional text insertion** directly into applications using `wtype`
+- **Window focus tracking** to ensure text is typed into the correct window
 - **Cost tracking** for API usage (OpenAI provider)
 - **Clean, simple interface** with recording time display
 - **Environment variable support** via `.env` file or plain environment
@@ -92,6 +93,16 @@ To automatically insert the transcribed text (requires `wtype`):
 ```bash
 ./rpdictation --wtype
 ```
+
+### Window focus tracking
+
+When using `--wtype`, you may switch to a different window while recording or during transcription. The `--track-window` flag ensures text is typed into the window that was focused when you started recording:
+
+```bash
+./rpdictation --wtype --track-window
+```
+
+This captures the focused window when recording starts. Before typing, it switches focus back to that window, types the text, then restores focus to where you were. Currently supports the Niri compositor.
 
 ### During recording
 
