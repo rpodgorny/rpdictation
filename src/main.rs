@@ -115,6 +115,10 @@ struct Args {
     /// Track window focus and restore it before typing
     #[arg(long)]
     track_window: bool,
+
+    /// Press Enter after typing the transcription (requires --wtype)
+    #[arg(long)]
+    enter: bool,
 }
 
 #[derive(Subcommand)]
@@ -538,12 +542,13 @@ async fn main_async() -> Result<()> {
             None
         };
 
-        // Type the text
-        tokio::process::Command::new("wtype")
-            .arg(&text)
-            .status()
-            .await
-            .context("Failed to run wtype")?;
+        // Type the text (and optionally press Enter)
+        let mut cmd = tokio::process::Command::new("wtype");
+        cmd.arg(&text);
+        if args.enter {
+            cmd.arg("-k").arg("Return");
+        }
+        cmd.status().await.context("Failed to run wtype")?;
 
         // Restore focus to the window that was focused before we switched
         if let (Some(ref fp), Some(ref restore_wid)) = (&focus_provider, &restore_window_id) {
