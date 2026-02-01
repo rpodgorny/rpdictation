@@ -24,15 +24,16 @@ const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
 const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
 
-fn send_notification(message: &str, expire: bool) {
+async fn send_notification(message: &str, expire: bool) {
     let expire_time = if expire { "3000" } else { "0" };
-    let _ = std::process::Command::new("notify-send")
+    let _ = tokio::process::Command::new("notify-send")
         .args([
             "--hint=string:x-canonical-private-synchronous:rpdictation",
             &format!("--expire-time={}", expire_time),
         ])
         .arg(message)
-        .spawn();
+        .status()
+        .await;
 }
 
 fn get_pid_path() -> PathBuf {
@@ -460,13 +461,13 @@ async fn main_async() -> Result<()> {
     let _ = tokio::fs::remove_file(get_pid_path()).await;
 
     drop(stream);
-    send_notification("Saving recording...", false);
+    send_notification("Saving recording...", false).await;
     if let Some(writer) = writer.lock().unwrap().take() {
         writer.finalize()?;
     }
     drop(writer); // TODO: not really needed
 
-    send_notification("Analyzing audio...", false);
+    send_notification("Analyzing audio...", false).await;
     println!("Recording saved. Analyzing...");
 
     let file_size = tokio::fs::metadata(RECORDING_FILENAME).await?.len();
@@ -481,12 +482,12 @@ async fn main_async() -> Result<()> {
             "Recording too short ({:.1} seconds), discarding.",
             duration_seconds
         );
-        send_notification("Recording too short, discarding", true);
+        send_notification("Recording too short, discarding", true).await;
         tokio::fs::remove_file(RECORDING_FILENAME).await?;
         return Ok(());
     }
 
-    send_notification("Transcribing...", false);
+    send_notification("Transcribing...", false).await;
     println!("\nTranscribing...");
 
     let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
@@ -499,7 +500,7 @@ async fn main_async() -> Result<()> {
     println!("{}", text);
 
     if args.wtype {
-        send_notification("Typing text...", false);
+        send_notification("Typing text...", false).await;
         println!("\nTyping text using wtype...");
 
         // Handle focus tracking if enabled
@@ -565,7 +566,7 @@ async fn main_async() -> Result<()> {
     } else {
         text.clone()
     };
-    send_notification(&format!("Done: {}", preview), true);
+    send_notification(&format!("Done: {}", preview), true).await;
 
     println!();
     println!("Audio duration: {:.1} seconds", duration_seconds);
