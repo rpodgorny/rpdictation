@@ -15,6 +15,10 @@ impl OpenAIProvider {
 
 #[async_trait]
 impl TranscriptionProvider for OpenAIProvider {
+    fn name(&self) -> &str {
+        "OpenAI"
+    }
+
     async fn transcribe(&self, audio_data: &[u8], _sample_rate: u32) -> Result<String> {
         let client = reqwest::Client::new();
         let file_part = reqwest::multipart::Part::bytes(audio_data.to_vec())
@@ -50,10 +54,6 @@ impl TranscriptionProvider for OpenAIProvider {
         };
 
         Ok(text.to_string())
-    }
-
-    fn name(&self) -> &str {
-        "OpenAI Whisper"
     }
 
     fn cost_per_minute(&self) -> Option<f64> {

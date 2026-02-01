@@ -99,9 +99,9 @@ struct Args {
     #[arg(long)]
     wtype: bool,
 
-    /// Transcription provider: "openai" or "google"
-    #[arg(long, default_value = "openai")]
-    provider: String,
+    /// Transcription provider: "openai" or "google" (auto-detects based on API key availability if not specified)
+    #[arg(long)]
+    provider: Option<String>,
 
     /// OpenAI API key (overrides OPENAI_API_KEY environment variable)
     #[arg(long)]
@@ -124,7 +124,7 @@ struct Args {
     enter: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum Command {
     /// Start recording (default if no command specified)
     Start,
@@ -138,7 +138,7 @@ async fn main_async() -> Result<()> {
     let args = Args::parse();
 
     // Determine effective command (default to Start)
-    let command = args.command.unwrap_or(Command::Start);
+    let command = args.command.clone().unwrap_or(Command::Start);
 
     match command {
         Command::Stop => {
@@ -171,21 +171,61 @@ async fn main_async() -> Result<()> {
         return Ok(());
     }
 
-    // Create the appropriate provider
-    let provider: Box<dyn TranscriptionProvider> = match args.provider.as_str() {
-        "google" => Box::new(GoogleProvider::new(args.google_api_key, args.language)),
-        _ => {
-            let api_key = match &args.openai_api_key {
-                Some(key) => key.clone(),
-                None => env::var("OPENAI_API_KEY").context(
-                    "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
-                )?,
-            };
+    // Helper to get OpenAI API key from CLI arg or environment
+    fn get_openai_api_key(args: &Args) -> Option<String> {
+        // Check CLI argument first
+        if let Some(ref key) = args.openai_api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        // Check environment variable
+        if let Ok(key) = env::var("OPENAI_API_KEY") {
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+        None
+    }
+
+    // Create the appropriate provider with auto-detection
+    let provider: Box<dyn TranscriptionProvider> = match args.provider.as_deref() {
+        Some("openai") => {
+            // Explicit --provider openai: require API key
+            let api_key = get_openai_api_key(&args).context(
+                "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
+            )?;
+            eprintln!("Using OpenAI provider");
             Box::new(OpenAIProvider::new(api_key))
         }
+        Some("google") => {
+            // Explicit --provider google
+            eprintln!("Using Google provider");
+            Box::new(GoogleProvider::new(
+                args.google_api_key.clone(),
+                args.language.clone(),
+            ))
+        }
+        Some(other) => {
+            anyhow::bail!(
+                "Invalid provider '{}'. Valid options: openai, google",
+                other
+            );
+        }
+        None => {
+            // Auto-detect based on API key availability
+            if let Some(api_key) = get_openai_api_key(&args) {
+                eprintln!("Using OpenAI provider (API key found)");
+                Box::new(OpenAIProvider::new(api_key))
+            } else {
+                eprintln!("Using Google provider (no OpenAI API key configured)");
+                Box::new(GoogleProvider::new(
+                    args.google_api_key.clone(),
+                    args.language.clone(),
+                ))
+            }
+        }
     };
-
-    eprintln!("Using provider: {}", provider.name());
 
     // Initialize focus provider if tracking is enabled
     let focus_provider: Option<Box<dyn FocusProvider>> = if args.track_window {
@@ -496,8 +536,8 @@ async fn main_async() -> Result<()> {
         return Ok(());
     }
 
-    send_notification("Transcribing...", false).await;
-    println!("\nTranscribing...");
+    send_notification(&format!("Transcribing ({})...", provider.name()), false).await;
+    println!("\nTranscribing ({})...", provider.name());
 
     let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
     tokio::fs::remove_file(RECORDING_FILENAME).await?;

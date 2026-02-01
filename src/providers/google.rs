@@ -22,6 +22,10 @@ impl GoogleProvider {
 
 #[async_trait]
 impl TranscriptionProvider for GoogleProvider {
+    fn name(&self) -> &str {
+        "Google"
+    }
+
     async fn transcribe(&self, audio_data: &[u8], sample_rate: u32) -> Result<String> {
         // Convert WAV to FLAC (CPU-intensive, run in blocking thread)
         println!("Converting WAV to FLAC...");
@@ -89,10 +93,6 @@ impl TranscriptionProvider for GoogleProvider {
         Err(anyhow::anyhow!(
             "No transcription found in Google API response"
         ))
-    }
-
-    fn name(&self) -> &str {
-        "Google Chromium Speech API"
     }
 
     fn cost_per_minute(&self) -> Option<f64> {
