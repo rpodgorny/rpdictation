@@ -15,7 +15,9 @@ mod audio;
 mod focus;
 mod providers;
 use focus::FocusProvider;
-use providers::{google::GoogleProvider, openai::OpenAIProvider, TranscriptionProvider};
+use providers::{
+    google::GoogleProvider, mistral::MistralProvider, openai::OpenAIProvider, TranscriptionProvider,
+};
 
 const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
@@ -100,13 +102,17 @@ struct Args {
     #[arg(long, value_name = "TOOL")]
     typer: Option<String>,
 
-    /// Transcription provider: "openai" or "google" (auto-detects based on API key availability if not specified)
+    /// Transcription provider: "openai", "mistral", or "google" (auto-detects based on API key availability if not specified)
     #[arg(long)]
     provider: Option<String>,
 
     /// OpenAI API key (overrides OPENAI_API_KEY environment variable)
     #[arg(long)]
     openai_api_key: Option<String>,
+
+    /// Mistral API key (overrides MISTRAL_API_KEY environment variable)
+    #[arg(long)]
+    mistral_api_key: Option<String>,
 
     /// Google API key (optional, uses default Chromium key if not provided)
     #[arg(long)]
@@ -193,6 +199,21 @@ async fn main_async() -> Result<()> {
         None
     }
 
+    // Helper to get Mistral API key from CLI arg or environment
+    fn get_mistral_api_key(args: &Args) -> Option<String> {
+        if let Some(ref key) = args.mistral_api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        if let Ok(key) = env::var("MISTRAL_API_KEY") {
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+        None
+    }
+
     // Create the appropriate provider with auto-detection
     let provider: Box<dyn TranscriptionProvider> = match args.provider.as_deref() {
         Some("openai") => {
@@ -202,6 +223,14 @@ async fn main_async() -> Result<()> {
             )?;
             eprintln!("Using OpenAI provider");
             Box::new(OpenAIProvider::new(api_key))
+        }
+        Some("mistral") => {
+            // Explicit --provider mistral: require API key
+            let api_key = get_mistral_api_key(&args).context(
+                "MISTRAL_API_KEY environment variable not set or --mistral-api-key not provided",
+            )?;
+            eprintln!("Using Mistral provider");
+            Box::new(MistralProvider::new(api_key))
         }
         Some("google") => {
             // Explicit --provider google
@@ -213,7 +242,7 @@ async fn main_async() -> Result<()> {
         }
         Some(other) => {
             anyhow::bail!(
-                "Invalid provider '{}'. Valid options: openai, google",
+                "Invalid provider '{}'. Valid options: openai, mistral, google",
                 other
             );
         }
@@ -222,8 +251,11 @@ async fn main_async() -> Result<()> {
             if let Some(api_key) = get_openai_api_key(&args) {
                 eprintln!("Using OpenAI provider (API key found)");
                 Box::new(OpenAIProvider::new(api_key))
+            } else if let Some(api_key) = get_mistral_api_key(&args) {
+                eprintln!("Using Mistral provider (API key found)");
+                Box::new(MistralProvider::new(api_key))
             } else {
-                eprintln!("Using Google provider (no OpenAI API key configured)");
+                eprintln!("Using Google provider (no OpenAI/Mistral API key configured)");
                 Box::new(GoogleProvider::new(
                     args.google_api_key.clone(),
                     args.language.clone(),

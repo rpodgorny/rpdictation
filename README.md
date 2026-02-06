@@ -2,13 +2,14 @@
 
 ![License](https://img.shields.io/badge/license-GPL-blue.svg)
 
-RPDictation is a simple, efficient speech-to-text transcription tool for Linux that provides accurate transcriptions directly from your microphone. It supports multiple speech recognition providers including OpenAI's Whisper API and Google's Chromium Speech API (free but limited alternative).
+RPDictation is a simple, efficient speech-to-text transcription tool for Linux that provides accurate transcriptions directly from your microphone. It supports multiple speech recognition providers including OpenAI's Whisper API, Mistral's Voxtral API, and Google's Chromium Speech API (free but limited alternative).
 
 ## Features
 
 - **Real-time audio recording** from your default microphone
 - **Multiple transcription providers**:
   - OpenAI's Whisper API (high quality, paid)
+  - Mistral's Voxtral API (high quality, half the price of OpenAI)
   - Google Chromium Speech API (free alternative, limited)
 - **Multiple ways to control recording**:
   - Press Enter
@@ -19,7 +20,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
 - **Optional text insertion** directly into applications using `wtype` or `ydotool` (`--typer`)
 - **Optional Enter key press** after typing (`--enter`)
 - **Window focus tracking** to ensure text is typed into the correct window
-- **Cost tracking** for API usage (OpenAI provider)
+- **Cost tracking** for API usage (OpenAI and Mistral providers)
 - **Clean, simple interface** with recording time display
 - **Environment variable support** via `.env` file or plain environment
 
@@ -31,6 +32,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
 - Linux with PulseAudio/PipeWire
 - API key requirements (depends on provider):
   - **OpenAI provider**: Requires OpenAI API key
+  - **Mistral provider**: Requires Mistral API key
   - **Google provider**: Works without API key (uses default Chromium key)
 - (Optional) `wtype` or `ydotool` for text insertion capability
 
@@ -60,6 +62,21 @@ With language specification:
 
 **Note:** The Google provider requires explicit language specification and does not support automatic language detection. If you need automatic language detection, use the OpenAI provider which includes this capability.
 
+### Basic usage with Mistral
+
+Using environment variable:
+
+```bash
+export MISTRAL_API_KEY=your_api_key_here
+./rpdictation --provider mistral
+```
+
+Or specify the API key directly:
+
+```bash
+./rpdictation --provider mistral --mistral-api-key your_api_key_here
+```
+
 ### Basic usage with OpenAI
 
 Using environment variable:
@@ -81,6 +98,7 @@ You can create a `.env` file in the project directory:
 
 ```bash
 OPENAI_API_KEY=your_api_key_here
+MISTRAL_API_KEY=your_api_key_here
 ```
 
 Then run:
@@ -135,10 +153,10 @@ You can also use `rpdictation toggle` to start/stop recording from a single keyb
 
 1. Records audio from your default microphone as a WAV file
 2. Saves the recording temporarily to `/tmp/rpdictation.wav`
-3. Submits the recording to your chosen provider (OpenAI Whisper or Google Speech API) for transcription
+3. Submits the recording to your chosen provider (OpenAI Whisper, Mistral Voxtral, or Google Speech API) for transcription
 4. Displays the transcription result
 5. Optionally types the text into your active application using the configured typing backend (`wtype` or `ydotool`)
-6. Calculates and displays the cost of the API call (OpenAI provider only)
+6. Calculates and displays the cost of the API call (OpenAI and Mistral providers)
 
 ## License
 
@@ -147,6 +165,7 @@ This project is licensed under the GNU General Public License v3.0 (GPL-3.0) - s
 ## Acknowledgments
 
 - [OpenAI Whisper](https://openai.com/research/whisper) for the speech recognition API
+- [Mistral Voxtral](https://mistral.ai/) for the speech recognition API
 - [Google Cloud Speech API](https://cloud.google.com/speech-to-text) for the free Chromium speech recognition
 - [CPAL](https://github.com/RustAudio/cpal) for cross-platform audio
 - [Tokio](https://tokio.rs/) for async runtime
