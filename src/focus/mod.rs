@@ -17,13 +17,17 @@ pub trait FocusProvider: Send + Sync {
     fn name(&self) -> &str;
 }
 
+#[cfg(unix)]
 pub mod niri;
 
 /// Detect and create the appropriate focus provider for the current compositor
 pub async fn detect_focus_provider() -> Option<Box<dyn FocusProvider>> {
-    // Try niri first
-    if let Some(provider) = niri::NiriFocusProvider::detect().await {
-        return Some(Box::new(provider));
+    // Try niri first (Unix only)
+    #[cfg(unix)]
+    {
+        if let Some(provider) = niri::NiriFocusProvider::detect().await {
+            return Some(Box::new(provider));
+        }
     }
 
     // Future: add more compositors here (hyprland, sway, etc.)

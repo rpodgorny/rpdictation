@@ -1,19 +1,28 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(unix)]
 use nix::sys::signal::{kill, Signal};
+#[cfg(unix)]
 use nix::unistd::Pid;
 use std::env;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
 mod audio;
+#[cfg(unix)]
 mod focus;
+#[cfg(windows)]
+mod ipc;
 mod providers;
+#[cfg(windows)]
+mod typing;
+#[cfg(unix)]
 use focus::FocusProvider;
 use providers::{google::GoogleProvider, openai::OpenAIProvider, TranscriptionProvider};
 
@@ -21,9 +30,14 @@ const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
 const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 
+#[cfg(unix)]
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
-const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
 
+fn recording_filepath() -> PathBuf {
+    std::env::temp_dir().join("rpdictation.wav")
+}
+
+#[cfg(unix)]
 async fn send_notification(message: &str, expire: bool) {
     let expire_time = if expire { "3000" } else { "0" };
     let _ = tokio::process::Command::new("notify-send")
@@ -36,11 +50,18 @@ async fn send_notification(message: &str, expire: bool) {
         .await;
 }
 
+#[cfg(windows)]
+async fn send_notification(_message: &str, _expire: bool) {
+    // No-op on Windows (desktop notifications not supported)
+}
+
+#[cfg(unix)]
 fn get_pid_path() -> PathBuf {
     let uid = nix::unistd::getuid();
     PathBuf::from(format!("/run/user/{}/rpdictation.pid", uid))
 }
 
+#[cfg(unix)]
 async fn stop_recording() -> Result<()> {
     let pid_path = get_pid_path();
 
@@ -72,6 +93,12 @@ async fn stop_recording() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+async fn stop_recording() -> Result<()> {
+    ipc::signal_stop()
+}
+
+#[cfg(unix)]
 async fn is_instance_running() -> Option<i32> {
     let pid_path = get_pid_path();
     let pid_str = tokio::fs::read_to_string(&pid_path).await.ok()?;
@@ -85,6 +112,15 @@ async fn is_instance_running() -> Option<i32> {
     } else {
         // Stale PID file, clean it up
         let _ = tokio::fs::remove_file(&pid_path).await;
+        None
+    }
+}
+
+#[cfg(windows)]
+async fn is_instance_running() -> Option<i32> {
+    if ipc::check_instance_running() {
+        Some(0) // PID not available via named mutex on Windows
+    } else {
         None
     }
 }
@@ -158,6 +194,12 @@ async fn main_async() -> Result<()> {
         }
     }
 
+    // Acquire instance lock to prevent concurrent recordings - Windows only
+    #[cfg(windows)]
+    let _instance_mutex =
+        ipc::InstanceMutex::acquire().context("Failed to acquire instance lock")?;
+
+    #[cfg(unix)]
     if args.wtype
         && !tokio::process::Command::new("which")
             .arg("wtype")
@@ -228,6 +270,12 @@ async fn main_async() -> Result<()> {
     };
 
     // Initialize focus provider if tracking is enabled
+    #[cfg(windows)]
+    if args.track_window {
+        eprintln!("Warning: focus tracking not supported on Windows");
+    }
+
+    #[cfg(unix)]
     let focus_provider: Option<Box<dyn FocusProvider>> = if args.track_window {
         match focus::detect_focus_provider().await {
             Some(fp) => {
@@ -244,6 +292,7 @@ async fn main_async() -> Result<()> {
     };
 
     // Capture focused window at recording start
+    #[cfg(unix)]
     let saved_window_id = if let Some(ref fp) = focus_provider {
         match fp.get_focused_window().await {
             Ok(wid) => {
@@ -268,7 +317,7 @@ async fn main_async() -> Result<()> {
         .context("Failed to get default input device")?;
 
     // Prepare WAV writer
-    let path = PathBuf::from(RECORDING_FILENAME);
+    let path = recording_filepath();
     let spec = hound::WavSpec {
         channels: CHANNELS,
         sample_rate: SAMPLE_RATE,
@@ -309,14 +358,21 @@ async fn main_async() -> Result<()> {
 
     stream.play()?;
 
-    if tokio::fs::metadata(FIFO_PATH).await.is_ok() {
-        tokio::fs::remove_file(FIFO_PATH).await?;
+    // FIFO setup - Unix only
+    #[cfg(unix)]
+    {
+        if tokio::fs::metadata(FIFO_PATH).await.is_ok() {
+            tokio::fs::remove_file(FIFO_PATH).await?;
+        }
+        nix::unistd::mkfifo(FIFO_PATH, nix::sys::stat::Mode::S_IRWXU)?;
     }
-    nix::unistd::mkfifo(FIFO_PATH, nix::sys::stat::Mode::S_IRWXU)?;
 
-    // Write PID file
-    let pid_path = get_pid_path();
-    tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
+    // Write PID file - Unix only
+    #[cfg(unix)]
+    {
+        let pid_path = get_pid_path();
+        tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
+    }
 
     let stdin_is_tty = std::io::stdin().is_terminal();
 
@@ -325,9 +381,16 @@ async fn main_async() -> Result<()> {
     if stdin_is_tty {
         println!("- Press Enter, or");
     }
-    println!("- Run: echo x > {}, or", FIFO_PATH);
-    println!("- Click the notification");
+    #[cfg(unix)]
+    {
+        println!("- Run: echo x > {}, or", FIFO_PATH);
+        println!("- Click the notification");
+    }
     println!();
+
+    // Windows named event for stop signaling
+    #[cfg(windows)]
+    let stop_event = ipc::StopEvent::create().context("Failed to create stop event")?;
 
     let cancel_token = CancellationToken::new();
 
@@ -345,14 +408,17 @@ async fn main_async() -> Result<()> {
                         let minutes = elapsed.as_secs() / 60;
                         let seconds = elapsed.as_secs() % 60;
 
-                        // Update notification (fire-and-forget, uses same hint to replace)
-                        let _ = tokio::process::Command::new("notify-send")
-                            .args([
-                                "--hint=string:x-canonical-private-synchronous:rpdictation",
-                                "--expire-time=0",
-                            ])
-                            .arg(format!("Recording {:02}:{:02}", minutes, seconds))
-                            .spawn();
+                        // Update notification (fire-and-forget) - Unix only
+                        #[cfg(unix)]
+                        {
+                            let _ = tokio::process::Command::new("notify-send")
+                                .args([
+                                    "--hint=string:x-canonical-private-synchronous:rpdictation",
+                                    "--expire-time=0",
+                                ])
+                                .arg(format!("Recording {:02}:{:02}", minutes, seconds))
+                                .spawn();
+                        }
 
                         // Keep terminal output
                         print!("\rRecording length: {:02}:{:02}", minutes, seconds);
@@ -389,7 +455,10 @@ async fn main_async() -> Result<()> {
         }
     });
 
+    // FIFO handler - Unix only
+    #[cfg(unix)]
     let (fifo_tx, mut fifo_rx) = tokio::sync::oneshot::channel();
+    #[cfg(unix)]
     let fifo_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
@@ -400,23 +469,15 @@ async fn main_async() -> Result<()> {
                     fifo_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send fifo signal"))?;
                 }
             }
-            /*
-            let mut fifo = File::open(FIFO_PATH).await?;
-            let mut buf = [0u8; 1];
-            eprintln!("fifo select");
-            tokio::select! {
-                _ = cancel_token.cancelled() => {}
-                /*_ = fifo.read(&mut buf) => {
-                    fifo_tx.send(()).map_err(|_| anyhow::anyhow!("Failed to send fifo signal"))?;
-                }*/
-            }
-            */
             eprintln!("fifo exit");
             Ok::<_, anyhow::Error>(())
         }
     });
 
+    // Notification handler - Unix only
+    #[cfg(unix)]
     let (notify_tx, mut notify_rx) = tokio::sync::oneshot::channel();
+    #[cfg(unix)]
     let notify_handle = tokio::spawn({
         let mut proc_notify = tokio::process::Command::new("notify-send")
             .args([
@@ -450,7 +511,10 @@ async fn main_async() -> Result<()> {
         }
     });
 
+    // Signal handler (SIGUSR1) - Unix only
+    #[cfg(unix)]
     let (signal_tx, mut signal_rx) = tokio::sync::oneshot::channel();
+    #[cfg(unix)]
     let signal_handle = tokio::spawn({
         let cancel_token = cancel_token.clone();
         async move {
@@ -467,39 +531,70 @@ async fn main_async() -> Result<()> {
         }
     });
 
+    // Windows named event handler
+    #[cfg(windows)]
+    let (event_tx, mut event_rx) = tokio::sync::oneshot::channel::<()>();
+    #[cfg(windows)]
+    let event_handle = tokio::spawn({
+        let cancel_token = cancel_token.clone();
+        async move {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {}
+                result = stop_event.wait(&cancel_token) => {
+                    if result.is_ok() {
+                        event_tx.send(()).ok();
+                    }
+                }
+            }
+            eprintln!("event exit");
+            Ok::<_, anyhow::Error>(())
+        }
+    });
+
+    // Wait for stop signal - platform-specific
+    #[cfg(unix)]
     let source = tokio::select! {
         _ = &mut stdin_rx => "stdin",
         _ = &mut fifo_rx => "fifo",
         _ = &mut notify_rx => "notify",
         _ = &mut signal_rx => "signal",
     };
+    #[cfg(windows)]
+    let source = tokio::select! {
+        _ = &mut stdin_rx => "stdin",
+        _ = &mut event_rx => "event",
+    };
+
     eprintln!("Stopped by {}", source);
 
     cancel_token.cancel();
 
-    /*
-        stdin_rx.close();
-        fifo_rx.close();
-        notify_rx.close();
-    */
-
+    // Join all handles - platform-specific
     eprintln!("joining");
-    //timer_handle.await??;
-    //stdin_handle.await??;
-    //fifo_handle.await??;
-    //notify_handle.await??;
-    let _ = tokio::try_join!(
-        timer_handle,
-        stdin_handle,
-        fifo_handle,
-        notify_handle,
-        signal_handle
-    )
-    .map_err(|_| anyhow::anyhow!("Failed to join"))?;
+    #[cfg(unix)]
+    {
+        let _ = tokio::try_join!(
+            timer_handle,
+            stdin_handle,
+            fifo_handle,
+            notify_handle,
+            signal_handle
+        )
+        .map_err(|_| anyhow::anyhow!("Failed to join"))?;
+    }
+    #[cfg(windows)]
+    {
+        let _ = tokio::try_join!(timer_handle, stdin_handle, event_handle)
+            .map_err(|_| anyhow::anyhow!("Failed to join"))?;
+    }
     eprintln!("joined");
 
-    tokio::fs::remove_file(FIFO_PATH).await?;
-    let _ = tokio::fs::remove_file(get_pid_path()).await;
+    // Cleanup - Unix only
+    #[cfg(unix)]
+    {
+        tokio::fs::remove_file(FIFO_PATH).await?;
+        let _ = tokio::fs::remove_file(get_pid_path()).await;
+    }
 
     drop(stream);
     send_notification("Saving recording...", false).await;
@@ -514,9 +609,11 @@ async fn main_async() -> Result<()> {
     send_notification("Analyzing audio...", false).await;
     println!("Recording saved. Analyzing...");
 
-    let file_size = tokio::fs::metadata(RECORDING_FILENAME).await?.len();
-    let duration_seconds = tokio::task::spawn_blocking(|| {
-        let reader = hound::WavReader::open(RECORDING_FILENAME)?;
+    let recording_path = recording_filepath();
+    let file_size = tokio::fs::metadata(&recording_path).await?.len();
+    let recording_path_clone = recording_path.clone();
+    let duration_seconds = tokio::task::spawn_blocking(move || {
+        let reader = hound::WavReader::open(recording_path_clone)?;
         let duration = reader.duration() as f64 / reader.spec().sample_rate as f64;
         Ok::<_, anyhow::Error>(duration)
     })
@@ -532,15 +629,15 @@ async fn main_async() -> Result<()> {
             duration_seconds
         );
         send_notification("Recording too short, discarding", true).await;
-        tokio::fs::remove_file(RECORDING_FILENAME).await?;
+        tokio::fs::remove_file(&recording_path).await?;
         return Ok(());
     }
 
     send_notification(&format!("Transcribing ({})...", provider.name()), false).await;
     println!("\nTranscribing ({})...", provider.name());
 
-    let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
-    tokio::fs::remove_file(RECORDING_FILENAME).await?;
+    let file_bytes = tokio::fs::read(&recording_path).await?;
+    tokio::fs::remove_file(&recording_path).await?;
 
     let text = provider.transcribe(&file_bytes, SAMPLE_RATE).await?;
 
@@ -548,6 +645,21 @@ async fn main_async() -> Result<()> {
     println!("Transcription:");
     println!("{}", text);
 
+    // Windows auto-typing via SendInput (always enabled, no --wtype flag needed)
+    #[cfg(windows)]
+    {
+        println!("\nTyping text using SendInput...");
+        if let Err(e) = typing::type_text(&text) {
+            eprintln!("Warning: Failed to type text: {}", e);
+        } else if args.enter {
+            if let Err(e) = typing::press_enter() {
+                eprintln!("Warning: Failed to press Enter: {}", e);
+            }
+        }
+    }
+
+    // wtype typing - Unix only
+    #[cfg(unix)]
     if args.wtype {
         send_notification("Typing text...", false).await;
         println!("\nTyping text using wtype...");
