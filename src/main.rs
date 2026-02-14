@@ -496,7 +496,11 @@ async fn main_async() -> Result<()> {
 
     let duration_seconds = samples.len() as f64 / SAMPLE_RATE as f64;
     let audio_duration = duration_seconds;
-    println!("Recording length: {:.1} seconds", duration_seconds);
+    let size_mb = (samples.len() * 2) as f64 / (1024.0 * 1024.0);
+    println!(
+        "Recording length: {:.1} seconds ({:.1} MB)",
+        duration_seconds, size_mb
+    );
 
     if duration_seconds < MIN_RECORDING_DURATION_SECONDS {
         eprintln!(
