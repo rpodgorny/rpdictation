@@ -99,6 +99,10 @@ struct Args {
     #[arg(long)]
     wtype: bool,
 
+    /// Use ydotool to type out the transcription
+    #[arg(long)]
+    ydotool: bool,
+
     /// Transcription provider: "openai" or "google" (auto-detects based on API key availability if not specified)
     #[arg(long)]
     provider: Option<String>,
@@ -119,7 +123,7 @@ struct Args {
     #[arg(long)]
     track_window: bool,
 
-    /// Press Enter after typing the transcription (requires --wtype)
+    /// Press Enter after typing the transcription (requires --wtype or --ydotool)
     #[arg(long)]
     enter: bool,
 }
@@ -158,16 +162,28 @@ async fn main_async() -> Result<()> {
         }
     }
 
-    if args.wtype
-        && !tokio::process::Command::new("which")
-            .arg("wtype")
+    if args.wtype && args.ydotool {
+        eprintln!("Cannot use both --wtype and --ydotool at the same time.");
+        return Ok(());
+    }
+
+    async fn command_exists(name: &str) -> bool {
+        tokio::process::Command::new("which")
+            .arg(name)
             .stdout(std::process::Stdio::null())
             .status()
             .await
             .map(|s| s.success())
             .unwrap_or(false)
-    {
+    }
+
+    if args.wtype && !command_exists("wtype").await {
         eprintln!("wtype command not found. Please install it to use this feature.");
+        return Ok(());
+    }
+
+    if args.ydotool && !command_exists("ydotool").await {
+        eprintln!("ydotool command not found. Please install it to use this feature.");
         return Ok(());
     }
 
@@ -548,9 +564,10 @@ async fn main_async() -> Result<()> {
     println!("Transcription:");
     println!("{}", text);
 
-    if args.wtype {
+    if args.wtype || args.ydotool {
+        let typer_name = if args.wtype { "wtype" } else { "ydotool" };
         send_notification("Typing text...", false).await;
-        println!("\nTyping text using wtype...");
+        println!("\nTyping text using {}...", typer_name);
 
         // Handle focus tracking if enabled
         let restore_window_id = if let (Some(ref fp), Some(ref saved_wid)) =
@@ -593,12 +610,27 @@ async fn main_async() -> Result<()> {
         };
 
         // Type the text (and optionally press Enter)
-        let mut cmd = tokio::process::Command::new("wtype");
-        cmd.arg(&text);
-        if args.enter {
-            cmd.arg("-k").arg("Return");
+        if args.wtype {
+            let mut cmd = tokio::process::Command::new("wtype");
+            cmd.arg(&text);
+            if args.enter {
+                cmd.arg("-k").arg("Return");
+            }
+            cmd.status().await.context("Failed to run wtype")?;
+        } else {
+            tokio::process::Command::new("ydotool")
+                .args(["type", "--", &text])
+                .status()
+                .await
+                .context("Failed to run ydotool")?;
+            if args.enter {
+                tokio::process::Command::new("ydotool")
+                    .args(["key", "28:1", "28:0"])
+                    .status()
+                    .await
+                    .context("Failed to run ydotool key")?;
+            }
         }
-        cmd.status().await.context("Failed to run wtype")?;
 
         // Restore focus to the window that was focused before we switched
         if let (Some(ref fp), Some(ref restore_wid)) = (&focus_provider, &restore_window_id) {
