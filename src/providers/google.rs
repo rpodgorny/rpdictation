@@ -53,7 +53,7 @@ impl TranscriptionProvider for GoogleProvider {
                 format!("audio/x-flac; rate={}", sample_rate),
             )
             .body(flac_data)
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(super::API_TIMEOUT)
             .send()
             .await
             .context("Failed to send request to Google API")?;

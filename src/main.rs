@@ -19,6 +19,8 @@ use providers::{google::GoogleProvider, openai::OpenAIProvider, TranscriptionPro
 
 const SAMPLE_RATE: u32 = 16000;
 const CHANNELS: u16 = 1;
+const BITS_PER_SAMPLE: u16 = 16;
+const BYTES_PER_SAMPLE: usize = (BITS_PER_SAMPLE / 8) as usize;
 const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
@@ -496,7 +498,7 @@ async fn main_async() -> Result<()> {
 
     let duration_seconds = samples.len() as f64 / SAMPLE_RATE as f64;
     let audio_duration = duration_seconds;
-    let size_mb = (samples.len() * 2) as f64 / (1024.0 * 1024.0);
+    let size_mb = (samples.len() * BYTES_PER_SAMPLE) as f64 / (1024.0 * 1024.0);
     println!(
         "Recording length: {:.1} seconds ({:.1} MB)",
         duration_seconds, size_mb

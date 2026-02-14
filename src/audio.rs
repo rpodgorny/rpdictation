@@ -6,7 +6,7 @@ pub fn samples_to_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
-        bits_per_sample: 16,
+        bits_per_sample: crate::BITS_PER_SAMPLE,
         sample_format: hound::SampleFormat::Int,
     };
     let mut cursor = std::io::Cursor::new(Vec::new());
@@ -39,8 +39,8 @@ pub fn wav_to_flac(wav_data: &[u8], sample_rate: u32) -> Result<Vec<u8>> {
 
     let source = flacenc::source::MemSource::from_samples(
         &samples,
-        1,  // mono
-        16, // bits per sample
+        1,                               // mono
+        crate::BITS_PER_SAMPLE as usize, // bits per sample
         sample_rate as usize,
     );
 

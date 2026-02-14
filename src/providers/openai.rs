@@ -33,7 +33,7 @@ impl TranscriptionProvider for OpenAIProvider {
             .post("https://api.openai.com/v1/audio/transcriptions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .multipart(form)
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(super::API_TIMEOUT)
             .send()
             .await
             .context("Failed to send request to OpenAI API")?;
