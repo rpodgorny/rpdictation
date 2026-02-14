@@ -2,6 +2,25 @@ use anyhow::{Context, Result};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 
+pub fn samples_to_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer =
+            hound::WavWriter::new(&mut cursor, spec).context("Failed to create WAV writer")?;
+        for &sample in samples {
+            writer.write_sample(sample)?;
+        }
+        writer.finalize().context("Failed to finalize WAV")?;
+    }
+    Ok(cursor.into_inner())
+}
+
 pub fn wav_to_flac(wav_data: &[u8], sample_rate: u32) -> Result<Vec<u8>> {
     // Parse WAV file to get PCM samples
     let mut cursor = std::io::Cursor::new(wav_data);

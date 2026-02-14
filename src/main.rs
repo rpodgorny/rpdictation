@@ -22,7 +22,6 @@ const CHANNELS: u16 = 1;
 const MIN_RECORDING_DURATION_SECONDS: f64 = 1.0;
 
 const FIFO_PATH: &str = "/tmp/rpdictation_stop";
-const RECORDING_FILENAME: &str = "/tmp/rpdictation.wav";
 
 async fn send_notification(message: &str, expire: bool) {
     let expire_time = if expire { "3000" } else { "0" };
@@ -271,20 +270,8 @@ async fn main_async() -> Result<()> {
         .default_input_device()
         .context("Failed to get default input device")?;
 
-    // Prepare WAV writer
-    let path = PathBuf::from(RECORDING_FILENAME);
-    let spec = hound::WavSpec {
-        channels: CHANNELS,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let wav_writer = tokio::task::spawn_blocking(move || {
-        hound::WavWriter::create(path, spec).context("Failed to create WAV file")
-    })
-    .await
-    .context("WAV writer task panicked")??;
-    let writer = Arc::new(Mutex::new(Some(wav_writer)));
+    // Collect raw samples in memory
+    let samples: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Configure input stream
     let config = cpal::StreamConfig {
@@ -293,18 +280,12 @@ async fn main_async() -> Result<()> {
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let writer_clone = Arc::clone(&writer);
+    let samples_clone = Arc::clone(&samples);
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _: &_| {
-            if let Ok(mut guard) = writer_clone.try_lock() {
-                if let Some(writer) = &mut *guard {
-                    for &sample in data {
-                        writer
-                            .write_sample((sample * i16::MAX as f32) as i16)
-                            .unwrap();
-                    }
-                }
+            if let Ok(mut guard) = samples_clone.try_lock() {
+                guard.extend(data.iter().map(|&s| (s * i16::MAX as f32) as i16));
             }
         },
         move |err| eprintln!("An error occurred on stream: {}", err),
@@ -506,29 +487,16 @@ async fn main_async() -> Result<()> {
     let _ = tokio::fs::remove_file(get_pid_path()).await;
 
     drop(stream);
-    send_notification("Saving recording...", false).await;
-    let writer_to_finalize = writer.lock().unwrap().take();
-    if let Some(w) = writer_to_finalize {
-        tokio::task::spawn_blocking(move || w.finalize())
-            .await
-            .context("WAV writer finalize task panicked")??;
-    }
-    drop(writer); // TODO: not really needed
-
     send_notification("Analyzing audio...", false).await;
-    println!("Recording saved. Analyzing...");
 
-    let file_size = tokio::fs::metadata(RECORDING_FILENAME).await?.len();
-    let duration_seconds = tokio::task::spawn_blocking(|| {
-        let reader = hound::WavReader::open(RECORDING_FILENAME)?;
-        let duration = reader.duration() as f64 / reader.spec().sample_rate as f64;
-        Ok::<_, anyhow::Error>(duration)
-    })
-    .await
-    .context("WAV reader task panicked")??;
-    println!("Recording length: {:.1} seconds", duration_seconds);
-    println!("File size: {:.1} MB", file_size as f64 / 1_048_576.0);
+    let samples = Arc::try_unwrap(samples)
+        .expect("samples Arc should have single owner after stream drop")
+        .into_inner()
+        .unwrap();
+
+    let duration_seconds = samples.len() as f64 / SAMPLE_RATE as f64;
     let audio_duration = duration_seconds;
+    println!("Recording length: {:.1} seconds", duration_seconds);
 
     if duration_seconds < MIN_RECORDING_DURATION_SECONDS {
         eprintln!(
@@ -536,17 +504,18 @@ async fn main_async() -> Result<()> {
             duration_seconds
         );
         send_notification("Recording too short, discarding", true).await;
-        tokio::fs::remove_file(RECORDING_FILENAME).await?;
         return Ok(());
     }
 
     send_notification(&format!("Transcribing ({})...", provider.name()), false).await;
     println!("\nTranscribing ({})...", provider.name());
 
-    let file_bytes = tokio::fs::read(RECORDING_FILENAME).await?;
-    tokio::fs::remove_file(RECORDING_FILENAME).await?;
+    let wav_bytes =
+        tokio::task::spawn_blocking(move || audio::samples_to_wav(&samples, SAMPLE_RATE))
+            .await
+            .context("WAV encoding task panicked")??;
 
-    let text = provider.transcribe(&file_bytes, SAMPLE_RATE).await?;
+    let text = provider.transcribe(&wav_bytes, SAMPLE_RATE).await?;
 
     println!();
     println!("Transcription:");
