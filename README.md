@@ -12,9 +12,12 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
   - Google Chromium Speech API (free alternative, limited)
 - **Multiple ways to control recording**:
   - Press Enter
+  - Run `rpdictation stop` or `rpdictation toggle`
+  - Send SIGUSR1 to the recording process
   - Send a command to a FIFO
   - Click a desktop notification
-- **Optional text insertion** directly into applications using `wtype`
+- **Optional text insertion** directly into applications using `wtype` or `ydotool` (`--typer`)
+- **Optional Enter key press** after typing (`--enter`)
 - **Window focus tracking** to ensure text is typed into the correct window
 - **Cost tracking** for API usage (OpenAI provider)
 - **Clean, simple interface** with recording time display
@@ -29,7 +32,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
 - API key requirements (depends on provider):
   - **OpenAI provider**: Requires OpenAI API key
   - **Google provider**: Works without API key (uses default Chromium key)
-- (Optional) `wtype` for text insertion capability
+- (Optional) `wtype` or `ydotool` for text insertion capability
 
 ### Build from source
 
@@ -86,20 +89,34 @@ Then run:
 ./rpdictation
 ```
 
+**Note:** If `--provider` is omitted, the provider is auto-detected: OpenAI is used if `OPENAI_API_KEY` is set, otherwise Google.
+
 ### Text insertion mode
 
-To automatically insert the transcribed text (requires `wtype`):
+To automatically insert the transcribed text using `wtype`:
 
 ```bash
-./rpdictation --wtype
+./rpdictation --typer=wtype
+```
+
+Or using `ydotool`:
+
+```bash
+./rpdictation --typer=ydotool
+```
+
+To also press Enter after typing the transcription:
+
+```bash
+./rpdictation --typer=wtype --enter
 ```
 
 ### Window focus tracking
 
-When using `--wtype`, you may switch to a different window while recording or during transcription. The `--track-window` flag ensures text is typed into the window that was focused when you started recording:
+When using `--typer`, you may switch to a different window while recording or during transcription. The `--track-window` flag ensures text is typed into the window that was focused when you started recording:
 
 ```bash
-./rpdictation --wtype --track-window
+./rpdictation --typer=wtype --track-window
 ```
 
 This captures the focused window when recording starts. Before typing, it switches focus back to that window, types the text, then restores focus to where you were. Currently supports the Niri compositor.
@@ -107,9 +124,12 @@ This captures the focused window when recording starts. Before typing, it switch
 ### During recording
 
 While recording, you can:
+- Run `rpdictation stop` in another terminal
 - Press Enter to stop recording
 - Run `echo x > /tmp/rpdictation_stop` in another terminal
 - Click the notification in your desktop environment
+
+You can also use `rpdictation toggle` to start/stop recording from a single keybinding.
 
 ## How it works
 
@@ -117,7 +137,7 @@ While recording, you can:
 2. Saves the recording temporarily to `/tmp/rpdictation.wav`
 3. Submits the recording to your chosen provider (OpenAI Whisper or Google Speech API) for transcription
 4. Displays the transcription result
-5. Optionally types the text into your active application using `wtype`
+5. Optionally types the text into your active application using the configured typing backend (`wtype` or `ydotool`)
 6. Calculates and displays the cost of the API call (OpenAI provider only)
 
 ## License
