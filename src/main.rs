@@ -95,13 +95,9 @@ struct Args {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Use wtype to type out the transcription
-    #[arg(long)]
-    wtype: bool,
-
-    /// Use ydotool to type out the transcription
-    #[arg(long)]
-    ydotool: bool,
+    /// Typing backend to use (e.g., wtype, ydotool)
+    #[arg(long, value_name = "TOOL")]
+    typer: Option<String>,
 
     /// Transcription provider: "openai" or "google" (auto-detects based on API key availability if not specified)
     #[arg(long)]
@@ -123,7 +119,7 @@ struct Args {
     #[arg(long)]
     track_window: bool,
 
-    /// Press Enter after typing the transcription (requires --wtype or --ydotool)
+    /// Press Enter after typing the transcription (requires --typer)
     #[arg(long)]
     enter: bool,
 }
@@ -162,11 +158,6 @@ async fn main_async() -> Result<()> {
         }
     }
 
-    if args.wtype && args.ydotool {
-        eprintln!("Cannot use both --wtype and --ydotool at the same time.");
-        return Ok(());
-    }
-
     async fn command_exists(name: &str) -> bool {
         tokio::process::Command::new("which")
             .arg(name)
@@ -177,14 +168,11 @@ async fn main_async() -> Result<()> {
             .unwrap_or(false)
     }
 
-    if args.wtype && !command_exists("wtype").await {
-        eprintln!("wtype command not found. Please install it to use this feature.");
-        return Ok(());
-    }
-
-    if args.ydotool && !command_exists("ydotool").await {
-        eprintln!("ydotool command not found. Please install it to use this feature.");
-        return Ok(());
+    if let Some(ref typer) = args.typer {
+        if !command_exists(typer).await {
+            eprintln!("{} command not found. Please install it.", typer);
+            return Ok(());
+        }
     }
 
     // Helper to get OpenAI API key from CLI arg or environment
@@ -564,10 +552,9 @@ async fn main_async() -> Result<()> {
     println!("Transcription:");
     println!("{}", text);
 
-    if args.wtype || args.ydotool {
-        let typer_name = if args.wtype { "wtype" } else { "ydotool" };
+    if let Some(ref typer) = args.typer {
         send_notification("Typing text...", false).await;
-        println!("\nTyping text using {}...", typer_name);
+        println!("\nTyping text using {}...", typer);
 
         // Handle focus tracking if enabled
         let restore_window_id = if let (Some(ref fp), Some(ref saved_wid)) =
@@ -610,25 +597,32 @@ async fn main_async() -> Result<()> {
         };
 
         // Type the text (and optionally press Enter)
-        if args.wtype {
-            let mut cmd = tokio::process::Command::new("wtype");
-            cmd.arg(&text);
-            if args.enter {
-                cmd.arg("-k").arg("Return");
+        match typer.as_str() {
+            "wtype" => {
+                let mut cmd = tokio::process::Command::new("wtype");
+                cmd.arg(&text);
+                if args.enter {
+                    cmd.arg("-k").arg("Return");
+                }
+                cmd.status().await.context("Failed to run wtype")?;
             }
-            cmd.status().await.context("Failed to run wtype")?;
-        } else {
-            tokio::process::Command::new("ydotool")
-                .args(["type", "--", &text])
-                .status()
-                .await
-                .context("Failed to run ydotool")?;
-            if args.enter {
+            "ydotool" => {
                 tokio::process::Command::new("ydotool")
-                    .args(["key", "28:1", "28:0"])
+                    .args(["type", "--", &text])
                     .status()
                     .await
-                    .context("Failed to run ydotool key")?;
+                    .context("Failed to run ydotool")?;
+                if args.enter {
+                    tokio::process::Command::new("ydotool")
+                        .args(["key", "28:1", "28:0"])
+                        .status()
+                        .await
+                        .context("Failed to run ydotool key")?;
+                }
+            }
+            _ => {
+                eprintln!("Unknown typer '{}'. Supported: wtype, ydotool", typer);
+                return Ok(());
             }
         }
 
