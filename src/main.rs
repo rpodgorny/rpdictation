@@ -583,7 +583,7 @@ async fn main_async() -> Result<()> {
             }
             "ydotool" => {
                 tokio::process::Command::new("ydotool")
-                    .args(["type", "--", &text])
+                    .args(["type", "-d", "1", "--", &text])
                     .status()
                     .await
                     .context("Failed to run ydotool")?;
