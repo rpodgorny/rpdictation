@@ -516,114 +516,127 @@ async fn main_async() -> Result<()> {
     send_notification(&format!("Transcribing ({})...", provider.name()), false).await;
     println!("\nTranscribing ({})...", provider.name());
 
-    let wav_bytes =
-        tokio::task::spawn_blocking(move || audio::samples_to_wav(&samples, SAMPLE_RATE))
-            .await
-            .context("WAV encoding task panicked")??;
+    let result: Result<(String, f64)> = async {
+        let wav_bytes =
+            tokio::task::spawn_blocking(move || audio::samples_to_wav(&samples, SAMPLE_RATE))
+                .await
+                .context("WAV encoding task panicked")??;
 
-    let text = provider.transcribe(&wav_bytes, SAMPLE_RATE).await?;
+        let text = provider.transcribe(&wav_bytes, SAMPLE_RATE).await?;
 
-    println!();
-    println!("Transcription:");
-    println!("{}", text);
+        println!();
+        println!("Transcription:");
+        println!("{}", text);
 
-    if let Some(ref typer) = args.typer {
-        send_notification("Typing text...", false).await;
-        println!("\nTyping text using {}...", typer);
+        if let Some(ref typer) = args.typer {
+            send_notification("Typing text...", false).await;
+            println!("\nTyping text using {}...", typer);
 
-        // Handle focus tracking if enabled
-        let restore_window_id = if let (Some(ref fp), Some(ref saved_wid)) =
-            (&focus_provider, &saved_window_id)
-        {
-            // Get current focused window
-            let current_wid = fp.get_focused_window().await.ok().flatten();
+            // Handle focus tracking if enabled
+            let restore_window_id = if let (Some(ref fp), Some(ref saved_wid)) =
+                (&focus_provider, &saved_window_id)
+            {
+                // Get current focused window
+                let current_wid = fp.get_focused_window().await.ok().flatten();
 
-            if current_wid.as_ref() != Some(saved_wid) {
-                // Focus changed, need to switch back
-                eprintln!(
-                    "Focus changed from {:?} to {:?}, switching back",
-                    saved_wid, current_wid
-                );
+                if current_wid.as_ref() != Some(saved_wid) {
+                    // Focus changed, need to switch back
+                    eprintln!(
+                        "Focus changed from {:?} to {:?}, switching back",
+                        saved_wid, current_wid
+                    );
 
-                // Try to focus the original window
-                match fp.set_focused_window(saved_wid).await {
-                    Ok(true) => {
-                        eprintln!("Switched focus to original window");
-                        // Remember current window for restoration after typing
-                        current_wid
+                    // Try to focus the original window
+                    match fp.set_focused_window(saved_wid).await {
+                        Ok(true) => {
+                            eprintln!("Switched focus to original window");
+                            // Remember current window for restoration after typing
+                            current_wid
+                        }
+                        Ok(false) => {
+                            eprintln!(
+                                "Warning: Failed to switch to original window (may be closed), typing into current"
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Error switching focus: {}, typing into current", e);
+                            None
+                        }
                     }
-                    Ok(false) => {
-                        eprintln!(
-                            "Warning: Failed to switch to original window (may be closed), typing into current"
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Error switching focus: {}, typing into current", e);
-                        None
-                    }
+                } else {
+                    // Focus unchanged, no need to restore
+                    None
                 }
             } else {
-                // Focus unchanged, no need to restore
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        // Type the text (and optionally press Enter)
-        match typer.as_str() {
-            "wtype" => {
-                let mut cmd = tokio::process::Command::new("wtype");
-                cmd.arg(&text);
-                if args.enter {
-                    cmd.arg("-k").arg("Return");
+            // Type the text (and optionally press Enter)
+            match typer.as_str() {
+                "wtype" => {
+                    let mut cmd = tokio::process::Command::new("wtype");
+                    cmd.arg(&text);
+                    if args.enter {
+                        cmd.arg("-k").arg("Return");
+                    }
+                    cmd.status().await.context("Failed to run wtype")?;
                 }
-                cmd.status().await.context("Failed to run wtype")?;
-            }
-            "ydotool" => {
-                tokio::process::Command::new("ydotool")
-                    .args(["type", "-d", "1", "--", &text])
-                    .status()
-                    .await
-                    .context("Failed to run ydotool")?;
-                if args.enter {
+                "ydotool" => {
                     tokio::process::Command::new("ydotool")
-                        .args(["key", "28:1", "28:0"])
+                        .args(["type", "-d", "1", "--", &text])
                         .status()
                         .await
-                        .context("Failed to run ydotool key")?;
+                        .context("Failed to run ydotool")?;
+                    if args.enter {
+                        tokio::process::Command::new("ydotool")
+                            .args(["key", "28:1", "28:0"])
+                            .status()
+                            .await
+                            .context("Failed to run ydotool key")?;
+                    }
+                }
+                _ => {
+                    eprintln!("Unknown typer '{}'. Supported: wtype, ydotool", typer);
+                    return Ok((text, audio_duration));
                 }
             }
-            _ => {
-                eprintln!("Unknown typer '{}'. Supported: wtype, ydotool", typer);
-                return Ok(());
+
+            // Restore focus to the window that was focused before we switched
+            if let (Some(ref fp), Some(ref restore_wid)) = (&focus_provider, &restore_window_id) {
+                eprintln!("Restoring focus to {:?}", restore_wid);
+                if let Err(e) = fp.set_focused_window(restore_wid).await {
+                    eprintln!("Warning: Failed to restore focus: {}", e);
+                }
             }
         }
 
-        // Restore focus to the window that was focused before we switched
-        if let (Some(ref fp), Some(ref restore_wid)) = (&focus_provider, &restore_window_id) {
-            eprintln!("Restoring focus to {:?}", restore_wid);
-            if let Err(e) = fp.set_focused_window(restore_wid).await {
-                eprintln!("Warning: Failed to restore focus: {}", e);
-            }
-        }
+        Ok((text, audio_duration))
     }
+    .await;
 
-    // Show first ~50 chars of transcription in notification
-    let preview = if text.len() > 50 {
-        format!("{}...", &text[..50])
-    } else {
-        text.clone()
-    };
-    send_notification(&format!("Done: {}", preview), true).await;
+    match result {
+        Ok((text, audio_duration)) => {
+            // Show first ~50 chars of transcription in notification
+            let preview = if text.len() > 50 {
+                format!("{}...", &text[..50])
+            } else {
+                text.clone()
+            };
+            send_notification(&format!("Done: {}", preview), true).await;
 
-    println!();
-    println!("Audio duration: {:.1} seconds", duration_seconds);
-    if let Some(cost_per_min) = provider.cost_per_minute() {
-        let minutes = (audio_duration / 60.0).ceil();
-        let cost = minutes * cost_per_min;
-        println!("Cost: ${:.4}", cost);
+            println!();
+            println!("Audio duration: {:.1} seconds", duration_seconds);
+            if let Some(cost_per_min) = provider.cost_per_minute() {
+                let minutes = (audio_duration / 60.0).ceil();
+                let cost = minutes * cost_per_min;
+                println!("Cost: ${:.4}", cost);
+            }
+        }
+        Err(e) => {
+            send_notification(&format!("Error: {}", e), true).await;
+            return Err(e);
+        }
     }
 
     eprintln!("exit");
