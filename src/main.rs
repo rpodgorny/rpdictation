@@ -615,11 +615,45 @@ async fn main_async() -> Result<()> {
                     cmd.status().await.context("Failed to run wtype")?;
                 }
                 "ydotool" => {
-                    tokio::process::Command::new("ydotool")
-                        .args(["type", "-d", "1", "--", &text])
-                        .status()
-                        .await
-                        .context("Failed to run ydotool")?;
+                    // ydotool works at the kernel evdev level and can only type ASCII
+                    // reliably. Non-English languages with diacritics (e.g. Czech č, ř, ž)
+                    // get stripped to plain ASCII. For non-English text, we work around
+                    // this by copying to clipboard via wl-copy and pasting with
+                    // Shift+Insert (key 42=LShift, 110=Insert), which is more universal
+                    // than Ctrl+V (doesn't work in all terminals/apps).
+                    // See: https://github.com/ReimuNotMoe/ydotool/issues/249
+                    let is_english = args.language.starts_with("en");
+                    if is_english {
+                        tokio::process::Command::new("ydotool")
+                            .args(["type", "-d", "1", "--", &text])
+                            .status()
+                            .await
+                            .context("Failed to run ydotool")?;
+                    } else {
+                        // Set both CLIPBOARD and PRIMARY selections — Shift+Insert
+                        // pastes from PRIMARY in many apps (especially terminals),
+                        // while others paste from CLIPBOARD.
+                        tokio::process::Command::new("wl-copy")
+                            .args(["--", &text])
+                            .status()
+                            .await
+                            .context("Failed to run wl-copy")?;
+                        tokio::process::Command::new("wl-copy")
+                            .args(["--primary", "--", &text])
+                            .status()
+                            .await
+                            .context("Failed to run wl-copy --primary")?;
+
+                        // Small delay to ensure clipboard is ready
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+                        // Shift+Insert to paste (42=KEY_LEFTSHIFT, 110=KEY_INSERT)
+                        tokio::process::Command::new("ydotool")
+                            .args(["key", "42:1", "110:1", "110:0", "42:0"])
+                            .status()
+                            .await
+                            .context("Failed to run ydotool key for Shift+Insert paste")?;
+                    }
                     if args.enter {
                         tokio::process::Command::new("ydotool")
                             .args(["key", "28:1", "28:0"])
