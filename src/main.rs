@@ -649,9 +649,12 @@ async fn main_async() -> Result<()> {
 
     match result {
         Ok((text, audio_duration)) => {
-            // Show first ~50 chars of transcription in notification
-            let preview = if text.len() > 50 {
-                format!("{}...", &text[..50])
+            // Show first ~50 chars of transcription in notification.
+            // Must use .chars().count() instead of .len() because non-English
+            // text (e.g. Czech ě, ř, ž) uses multi-byte UTF-8 characters —
+            // slicing by byte index would panic at a non-char boundary.
+            let preview = if text.chars().count() > 50 {
+                format!("{}...", text.chars().take(50).collect::<String>())
             } else {
                 text.clone()
             };
