@@ -158,6 +158,10 @@ You can also use `rpdictation toggle` to start/stop recording from a single keyb
 5. Optionally types the text into your active application using the configured typing backend (`wtype` or `ydotool`)
 6. Calculates and displays the cost of the API call (OpenAI and Mistral providers)
 
+## Similar projects
+
+- **[Coe (聲)](https://github.com/quailyquaily/coe)** — A feature-rich Linux voice dictation tool written in Go, targeting GNOME/Wayland. Compared to rpdictation, Coe offers LLM-based post-processing (punctuation, casing, formatting correction), local/offline ASR via whisper.cpp, Fcitx5 IME integration, hold-to-talk mode, a personal dictionary, XDG Portal-first design, and context-aware paste shortcuts (terminal vs regular apps). It runs as a background daemon with a YAML config file. rpdictation is lighter-weight and more Unix-y by comparison: single invocation (no daemon), free Google STT fallback, Mistral provider support, cost tracking, multiple stop methods (FIFO, signals, notifications), and Niri compositor support.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0) - see the LICENSE file for details.
