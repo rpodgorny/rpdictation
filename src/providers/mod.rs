@@ -11,5 +11,6 @@ pub trait TranscriptionProvider: Send + Sync {
 pub const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub mod google;
+pub mod groq;
 pub mod mistral;
 pub mod openai;

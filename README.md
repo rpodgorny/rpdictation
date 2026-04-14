@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-GPL-blue.svg)
 
-RPDictation is a simple, efficient speech-to-text transcription tool for Linux that provides accurate transcriptions directly from your microphone. It supports multiple speech recognition providers including OpenAI's Whisper API, Mistral's Voxtral API, and Google's Chromium Speech API (free but limited alternative).
+RPDictation is a simple, efficient speech-to-text transcription tool for Linux that provides accurate transcriptions directly from your microphone. It supports multiple speech recognition providers including OpenAI's Whisper API, Mistral's Voxtral API, Groq's Whisper API, and Google's Chromium Speech API (free but limited alternative).
 
 ## Features
 
@@ -10,6 +10,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
 - **Multiple transcription providers**:
   - OpenAI's Whisper API (high quality, paid)
   - Mistral's Voxtral API (high quality, half the price of OpenAI)
+  - Groq's Whisper API (very fast, very cheap)
   - Google Chromium Speech API (free alternative, limited)
 - **Multiple ways to control recording**:
   - Press Enter
@@ -33,6 +34,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
 - API key requirements (depends on provider):
   - **OpenAI provider**: Requires OpenAI API key
   - **Mistral provider**: Requires Mistral API key
+  - **Groq provider**: Requires Groq API key
   - **Google provider**: Works without API key (uses default Chromium key)
 - (Optional) `wtype` or `ydotool` for text insertion capability
 
@@ -77,6 +79,21 @@ Or specify the API key directly:
 ./rpdictation --provider mistral --mistral-api-key your_api_key_here
 ```
 
+### Basic usage with Groq
+
+Using environment variable:
+
+```bash
+export GROQ_API_KEY=your_api_key_here
+./rpdictation --provider groq
+```
+
+Or specify the API key directly:
+
+```bash
+./rpdictation --provider groq --groq-api-key your_api_key_here
+```
+
 ### Basic usage with OpenAI
 
 Using environment variable:
@@ -99,6 +116,7 @@ You can create a `.env` file in the project directory:
 ```bash
 OPENAI_API_KEY=your_api_key_here
 MISTRAL_API_KEY=your_api_key_here
+GROQ_API_KEY=your_api_key_here
 ```
 
 Then run:

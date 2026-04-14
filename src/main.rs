@@ -16,7 +16,8 @@ mod focus;
 mod providers;
 use focus::FocusProvider;
 use providers::{
-    google::GoogleProvider, mistral::MistralProvider, openai::OpenAIProvider, TranscriptionProvider,
+    google::GoogleProvider, groq::GroqProvider, mistral::MistralProvider, openai::OpenAIProvider,
+    TranscriptionProvider,
 };
 
 const SAMPLE_RATE: u32 = 16000;
@@ -102,7 +103,7 @@ struct Args {
     #[arg(long, value_name = "TOOL")]
     typer: Option<String>,
 
-    /// Transcription provider: "openai", "mistral", or "google" (auto-detects based on API key availability if not specified)
+    /// Transcription provider: "openai", "mistral", "groq", or "google" (auto-detects based on API key availability if not specified)
     #[arg(long)]
     provider: Option<String>,
 
@@ -113,6 +114,10 @@ struct Args {
     /// Mistral API key (overrides MISTRAL_API_KEY environment variable)
     #[arg(long)]
     mistral_api_key: Option<String>,
+
+    /// Groq API key (overrides GROQ_API_KEY environment variable)
+    #[arg(long)]
+    groq_api_key: Option<String>,
 
     /// Google API key (optional, uses default Chromium key if not provided)
     #[arg(long)]
@@ -214,6 +219,21 @@ async fn main_async() -> Result<()> {
         None
     }
 
+    // Helper to get Groq API key from CLI arg or environment
+    fn get_groq_api_key(args: &Args) -> Option<String> {
+        if let Some(ref key) = args.groq_api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        if let Ok(key) = env::var("GROQ_API_KEY") {
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+        None
+    }
+
     // Create the appropriate provider with auto-detection
     let provider: Box<dyn TranscriptionProvider> = match args.provider.as_deref() {
         Some("openai") => {
@@ -232,6 +252,14 @@ async fn main_async() -> Result<()> {
             eprintln!("Using Mistral provider");
             Box::new(MistralProvider::new(api_key))
         }
+        Some("groq") => {
+            // Explicit --provider groq: require API key
+            let api_key = get_groq_api_key(&args).context(
+                "GROQ_API_KEY environment variable not set or --groq-api-key not provided",
+            )?;
+            eprintln!("Using Groq provider");
+            Box::new(GroqProvider::new(api_key))
+        }
         Some("google") => {
             // Explicit --provider google
             eprintln!("Using Google provider");
@@ -242,7 +270,7 @@ async fn main_async() -> Result<()> {
         }
         Some(other) => {
             anyhow::bail!(
-                "Invalid provider '{}'. Valid options: openai, mistral, google",
+                "Invalid provider '{}'. Valid options: openai, mistral, groq, google",
                 other
             );
         }
@@ -254,8 +282,11 @@ async fn main_async() -> Result<()> {
             } else if let Some(api_key) = get_mistral_api_key(&args) {
                 eprintln!("Using Mistral provider (API key found)");
                 Box::new(MistralProvider::new(api_key))
+            } else if let Some(api_key) = get_groq_api_key(&args) {
+                eprintln!("Using Groq provider (API key found)");
+                Box::new(GroqProvider::new(api_key))
             } else {
-                eprintln!("Using Google provider (no OpenAI/Mistral API key configured)");
+                eprintln!("Using Google provider (no OpenAI/Mistral/Groq API key configured)");
                 Box::new(GoogleProvider::new(
                     args.google_api_key.clone(),
                     args.language.clone(),
