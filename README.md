@@ -12,6 +12,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
   - Mistral's Voxtral API (high quality, half the price of OpenAI)
   - Groq's Whisper API (very fast, very cheap)
   - Google Chromium Speech API (free alternative, limited)
+- **Provider fallback chain** — pass a comma-separated list to `--provider` (e.g. `google,google,groq,mistral`) and rpdictation will retry the next provider on failure, so a flaky API or transient outage doesn't cost you a dictation
 - **Multiple ways to control recording**:
   - Press Enter
   - Run `rpdictation stop` or `rpdictation toggle`
@@ -125,7 +126,17 @@ Then run:
 ./rpdictation
 ```
 
-**Note:** If `--provider` is omitted, the provider is auto-detected: OpenAI is used if `OPENAI_API_KEY` is set, otherwise Google.
+**Note:** If `--provider` is omitted, the provider is auto-detected: OpenAI is used if `OPENAI_API_KEY` is set, otherwise Mistral, Groq, or Google, in that order.
+
+### Provider fallback chain
+
+`--provider` accepts a comma-separated list. Each entry is tried in order and the first one that succeeds wins; on failure, rpdictation logs the error and moves on to the next. An entry may repeat if you want more than one attempt at the same provider.
+
+```bash
+./rpdictation --provider google,google,groq,mistral,mistral
+```
+
+The example above tries Google twice, then Groq once, then Mistral twice, and only fails if all five attempts fail. Useful for pairing a free/cheap primary with a paid backup — e.g. let Google do most of the work and fall back to a paid provider only when it hiccups. Cost reporting reflects the provider that actually produced the transcript.
 
 ### Text insertion mode
 
@@ -178,7 +189,7 @@ You can also use `rpdictation toggle` to start/stop recording from a single keyb
 
 ## Similar projects
 
-- **[Coe (聲)](https://github.com/quailyquaily/coe)** — A feature-rich Linux voice dictation tool written in Go, targeting GNOME/Wayland. Compared to rpdictation, Coe offers LLM-based post-processing (punctuation, casing, formatting correction), local/offline ASR via whisper.cpp, Fcitx5 IME integration, hold-to-talk mode, a personal dictionary, XDG Portal-first design, and context-aware paste shortcuts (terminal vs regular apps). It runs as a background daemon with a YAML config file. rpdictation is lighter-weight and more Unix-y by comparison: single invocation (no daemon), free Google STT fallback, Mistral provider support, cost tracking, multiple stop methods (FIFO, signals, notifications), and Niri compositor support.
+- **[Coe (聲)](https://github.com/quailyquaily/coe)** — A feature-rich Linux voice dictation tool written in Go, targeting GNOME/Wayland. Compared to rpdictation, Coe offers LLM-based post-processing (punctuation, casing, formatting correction), local/offline ASR via whisper.cpp, Fcitx5 IME integration, hold-to-talk mode, a personal dictionary, XDG Portal-first design, and context-aware paste shortcuts (terminal vs regular apps). It runs as a background daemon with a YAML config file. rpdictation is lighter-weight and more Unix-y by comparison: single invocation (no daemon), free Google STT fallback, Mistral provider support, provider fallback chain with automatic retries across providers, cost tracking, multiple stop methods (FIFO, signals, notifications), and Niri compositor support.
 
 ## License
 

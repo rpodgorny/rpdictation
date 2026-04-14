@@ -103,7 +103,10 @@ struct Args {
     #[arg(long, value_name = "TOOL")]
     typer: Option<String>,
 
-    /// Transcription provider: "openai", "mistral", "groq", or "google" (auto-detects based on API key availability if not specified)
+    /// Transcription provider(s): "openai", "mistral", "groq", or "google".
+    /// Accepts a comma-separated list to retry in order on failure,
+    /// e.g. "google,google,groq,mistral". Auto-detects a single provider
+    /// based on API key availability if not specified.
     #[arg(long)]
     provider: Option<String>,
 
@@ -234,49 +237,56 @@ async fn main_async() -> Result<()> {
         None
     }
 
-    // Create the appropriate provider with auto-detection
-    let provider: Box<dyn TranscriptionProvider> = match args.provider.as_deref() {
-        Some("openai") => {
-            // Explicit --provider openai: require API key
-            let api_key = get_openai_api_key(&args).context(
-                "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
-            )?;
-            eprintln!("Using OpenAI provider");
-            Box::new(OpenAIProvider::new(api_key))
-        }
-        Some("mistral") => {
-            // Explicit --provider mistral: require API key
-            let api_key = get_mistral_api_key(&args).context(
-                "MISTRAL_API_KEY environment variable not set or --mistral-api-key not provided",
-            )?;
-            eprintln!("Using Mistral provider");
-            Box::new(MistralProvider::new(api_key))
-        }
-        Some("groq") => {
-            // Explicit --provider groq: require API key
-            let api_key = get_groq_api_key(&args).context(
-                "GROQ_API_KEY environment variable not set or --groq-api-key not provided",
-            )?;
-            eprintln!("Using Groq provider");
-            Box::new(GroqProvider::new(api_key))
-        }
-        Some("google") => {
-            // Explicit --provider google
-            eprintln!("Using Google provider");
-            Box::new(GoogleProvider::new(
+    let build_provider = |name: &str| -> Result<Box<dyn TranscriptionProvider>> {
+        match name {
+            "openai" => {
+                let api_key = get_openai_api_key(&args).context(
+                    "OPENAI_API_KEY environment variable not set or --openai-api-key not provided",
+                )?;
+                Ok(Box::new(OpenAIProvider::new(api_key)))
+            }
+            "mistral" => {
+                let api_key = get_mistral_api_key(&args).context(
+                    "MISTRAL_API_KEY environment variable not set or --mistral-api-key not provided",
+                )?;
+                Ok(Box::new(MistralProvider::new(api_key)))
+            }
+            "groq" => {
+                let api_key = get_groq_api_key(&args).context(
+                    "GROQ_API_KEY environment variable not set or --groq-api-key not provided",
+                )?;
+                Ok(Box::new(GroqProvider::new(api_key)))
+            }
+            "google" => Ok(Box::new(GoogleProvider::new(
                 args.google_api_key.clone(),
                 args.language.clone(),
-            ))
-        }
-        Some(other) => {
-            anyhow::bail!(
+            ))),
+            other => anyhow::bail!(
                 "Invalid provider '{}'. Valid options: openai, mistral, groq, google",
                 other
-            );
+            ),
+        }
+    };
+
+    // Build the provider chain. A comma-separated list means "try these in order,
+    // falling back to the next on failure". Auto-detection yields a single provider.
+    let providers: Vec<Box<dyn TranscriptionProvider>> = match args.provider.as_deref() {
+        Some(list) => {
+            let mut providers: Vec<Box<dyn TranscriptionProvider>> = Vec::new();
+            for name in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                providers.push(build_provider(name)?);
+            }
+            if providers.is_empty() {
+                anyhow::bail!("--provider list is empty");
+            }
+            let names: Vec<&str> = providers.iter().map(|p| p.name()).collect();
+            eprintln!("Provider chain: {}", names.join(" -> "));
+            providers
         }
         None => {
             // Auto-detect based on API key availability
-            if let Some(api_key) = get_openai_api_key(&args) {
+            let p: Box<dyn TranscriptionProvider> = if let Some(api_key) = get_openai_api_key(&args)
+            {
                 eprintln!("Using OpenAI provider (API key found)");
                 Box::new(OpenAIProvider::new(api_key))
             } else if let Some(api_key) = get_mistral_api_key(&args) {
@@ -291,7 +301,8 @@ async fn main_async() -> Result<()> {
                     args.google_api_key.clone(),
                     args.language.clone(),
                 ))
-            }
+            };
+            vec![p]
         }
     };
 
@@ -576,16 +587,45 @@ async fn main_async() -> Result<()> {
         return Ok(());
     }
 
-    send_notification(&format!("Transcribing ({})...", provider.name()), false).await;
-    println!("\nTranscribing ({})...", provider.name());
-
-    let result: Result<(String, f64)> = async {
+    let result: Result<(String, f64, usize)> = async {
         let wav_bytes =
             tokio::task::spawn_blocking(move || audio::samples_to_wav(&samples, SAMPLE_RATE))
                 .await
                 .context("WAV encoding task panicked")??;
 
-        let text = provider.transcribe(&wav_bytes, SAMPLE_RATE).await?;
+        let total = providers.len();
+        let mut text: Option<String> = None;
+        let mut succeeded_idx: Option<usize> = None;
+        let mut last_err: Option<anyhow::Error> = None;
+        for (i, p) in providers.iter().enumerate() {
+            let msg = if total == 1 {
+                format!("Transcribing ({})...", p.name())
+            } else if i == 0 {
+                format!("Transcribing ({}) [1/{}]...", p.name(), total)
+            } else {
+                format!("Retrying with {} [{}/{}]...", p.name(), i + 1, total)
+            };
+            send_notification(&msg, false).await;
+            println!("\n{}", msg);
+
+            match p.transcribe(&wav_bytes, SAMPLE_RATE).await {
+                Ok(t) => {
+                    text = Some(t);
+                    succeeded_idx = Some(i);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("Provider {} failed: {:#}", p.name(), e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        let text = text.ok_or_else(|| {
+            last_err
+                .map(|e| e.context("all providers failed"))
+                .unwrap_or_else(|| anyhow::anyhow!("all providers failed"))
+        })?;
+        let succeeded_idx = succeeded_idx.expect("succeeded_idx set on success");
 
         println!();
         println!("Transcription:");
@@ -695,7 +735,7 @@ async fn main_async() -> Result<()> {
                 }
                 _ => {
                     eprintln!("Unknown typer '{}'. Supported: wtype, ydotool", typer);
-                    return Ok((text, audio_duration));
+                    return Ok((text, audio_duration, succeeded_idx));
                 }
             }
 
@@ -708,12 +748,12 @@ async fn main_async() -> Result<()> {
             }
         }
 
-        Ok((text, audio_duration))
+        Ok((text, audio_duration, succeeded_idx))
     }
     .await;
 
     match result {
-        Ok((text, audio_duration)) => {
+        Ok((text, audio_duration, succeeded_idx)) => {
             // Show first ~50 chars of transcription in notification.
             // Must use .chars().count() instead of .len() because non-English
             // text (e.g. Czech ě, ř, ž) uses multi-byte UTF-8 characters —
@@ -727,7 +767,7 @@ async fn main_async() -> Result<()> {
 
             println!();
             println!("Audio duration: {:.1} seconds", duration_seconds);
-            if let Some(cost_per_min) = provider.cost_per_minute() {
+            if let Some(cost_per_min) = providers[succeeded_idx].cost_per_minute() {
                 let minutes = (audio_duration / 60.0).ceil();
                 let cost = minutes * cost_per_min;
                 println!("Cost: ${:.4}", cost);
