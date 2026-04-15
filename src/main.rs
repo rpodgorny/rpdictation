@@ -137,6 +137,13 @@ struct Args {
     /// Press Enter after typing the transcription (requires --typer)
     #[arg(long)]
     enter: bool,
+
+    /// Insert text via clipboard paste (wl-copy + Shift+Insert) instead of
+    /// direct typing. Useful when the typer's direct-type path is broken
+    /// (e.g. wtype on Niri) or strips diacritics (ydotool). Implicitly
+    /// enabled for non-English languages.
+    #[arg(long)]
+    paste: bool,
 }
 
 #[derive(Subcommand, Clone)]
@@ -676,32 +683,54 @@ async fn main_async() -> Result<()> {
                 None
             };
 
+            // Non-English forces paste mode because ydotool's direct-type
+            // strips diacritics at the evdev level.
+            // See: https://github.com/ReimuNotMoe/ydotool/issues/249
+            let paste = args.paste || !args.language.starts_with("en");
+
             // Type the text (and optionally press Enter)
             match typer.as_str() {
                 "wtype" => {
-                    let mut cmd = tokio::process::Command::new("wtype");
-                    cmd.arg(&text);
-                    if args.enter {
-                        cmd.arg("-k").arg("Return");
-                    }
-                    cmd.status().await.context("Failed to run wtype")?;
-                }
-                "ydotool" => {
-                    // ydotool works at the kernel evdev level and can only type ASCII
-                    // reliably. Non-English languages with diacritics (e.g. Czech č, ř, ž)
-                    // get stripped to plain ASCII. For non-English text, we work around
-                    // this by copying to clipboard via wl-copy and pasting with
-                    // Shift+Insert (key 42=LShift, 110=Insert), which is more universal
-                    // than Ctrl+V (doesn't work in all terminals/apps).
-                    // See: https://github.com/ReimuNotMoe/ydotool/issues/249
-                    let is_english = args.language.starts_with("en");
-                    if is_english {
-                        tokio::process::Command::new("ydotool")
-                            .args(["type", "-d", "1", "--", &text])
+                    if paste {
+                        tokio::process::Command::new("wl-copy")
+                            .args(["--", &text])
                             .status()
                             .await
-                            .context("Failed to run ydotool")?;
+                            .context("Failed to run wl-copy")?;
+                        tokio::process::Command::new("wl-copy")
+                            .args(["--primary", "--", &text])
+                            .status()
+                            .await
+                            .context("Failed to run wl-copy --primary")?;
+
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+                        tokio::process::Command::new("wtype")
+                            .args(["-M", "shift", "-k", "Insert", "-m", "shift"])
+                            .status()
+                            .await
+                            .context("Failed to run wtype for Shift+Insert paste")?;
+
+                        if args.enter {
+                            tokio::process::Command::new("wtype")
+                                .args(["-k", "Return"])
+                                .status()
+                                .await
+                                .context("Failed to run wtype for Enter")?;
+                        }
                     } else {
+                        let mut cmd = tokio::process::Command::new("wtype");
+                        cmd.arg(&text);
+                        if args.enter {
+                            cmd.arg("-k").arg("Return");
+                        }
+                        cmd.status().await.context("Failed to run wtype")?;
+                    }
+                }
+                "ydotool" => {
+                    // Shift+Insert is more universal than Ctrl+V (doesn't work
+                    // in all terminals/apps).
+                    if paste {
                         // Set both CLIPBOARD and PRIMARY selections — Shift+Insert
                         // pastes from PRIMARY in many apps (especially terminals),
                         // while others paste from CLIPBOARD.
@@ -725,6 +754,12 @@ async fn main_async() -> Result<()> {
                             .status()
                             .await
                             .context("Failed to run ydotool key for Shift+Insert paste")?;
+                    } else {
+                        tokio::process::Command::new("ydotool")
+                            .args(["type", "-d", "1", "--", &text])
+                            .status()
+                            .await
+                            .context("Failed to run ydotool")?;
                     }
                     if args.enter {
                         tokio::process::Command::new("ydotool")
