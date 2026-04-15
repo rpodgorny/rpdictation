@@ -20,6 +20,7 @@ RPDictation is a simple, efficient speech-to-text transcription tool for Linux t
   - Send a command to a FIFO
   - Click a desktop notification
 - **Optional text insertion** directly into applications using `wtype` or `ydotool` (`--typer`)
+- **Clipboard paste mode** (`--paste`) that inserts text via `wl-copy` + Shift+Insert instead of direct typing — works around `wtype`'s broken keymap handling on Niri and `ydotool`'s diacritic stripping. Implicitly enabled for non-English languages.
 - **Optional Enter key press** after typing (`--enter`)
 - **Window focus tracking** to ensure text is typed into the correct window
 - **Cost tracking** for API usage (OpenAI and Mistral providers)
@@ -157,6 +158,21 @@ To also press Enter after typing the transcription:
 ```bash
 ./rpdictation --typer=wtype --enter
 ```
+
+### Clipboard paste mode
+
+The `--paste` flag inserts the transcribed text via the clipboard (`wl-copy` + Shift+Insert) instead of the typer's direct-type path:
+
+```bash
+./rpdictation --typer=wtype --paste
+```
+
+This works around two issues:
+
+- `wtype` direct-type is broken on Niri because of how the compositor handles keymaps.
+- `ydotool` direct-type strips diacritics, so non-ASCII text comes out mangled.
+
+Paste mode is implicitly enabled whenever `--language` is set to anything that doesn't start with `en`, so non-English dictations get the correct characters by default. `wl-copy` must be available for this to work.
 
 ### Window focus tracking
 
