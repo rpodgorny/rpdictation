@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [0.2.0] - 2026-04-15
+
+### Added
+- `--paste` flag that inserts transcribed text via `wl-copy` + Shift+Insert
+  instead of direct typing. Works around `wtype`'s broken keymap handling on
+  Niri and `ydotool`'s diacritic stripping. Non-English languages implicitly
+  enable it.
+
+### Fixed
+- Leading and trailing whitespace returned by some providers is now stripped
+  centrally, so display, typing, and paste paths all see clean text.
+
 ## [0.1.0] - 2026-04-15
 
 Initial release. RPDictation is a lightweight Linux speech-to-text tool that
