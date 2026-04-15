@@ -618,7 +618,7 @@ async fn main_async() -> Result<()> {
 
             match p.transcribe(&wav_bytes, SAMPLE_RATE).await {
                 Ok(t) => {
-                    text = Some(t);
+                    text = Some(t.trim().to_string());
                     succeeded_idx = Some(i);
                     break;
                 }
