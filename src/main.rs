@@ -284,25 +284,26 @@ async fn main_async() -> Result<()> {
             providers
         }
         None => {
-            // Auto-detect based on API key availability
-            let p: Box<dyn TranscriptionProvider> = if let Some(api_key) = get_openai_api_key(&args)
-            {
-                eprintln!("Using OpenAI provider (API key found)");
-                Box::new(OpenAIProvider::new(api_key))
-            } else if let Some(api_key) = get_mistral_api_key(&args) {
-                eprintln!("Using Mistral provider (API key found)");
-                Box::new(MistralProvider::new(api_key))
-            } else if let Some(api_key) = get_groq_api_key(&args) {
-                eprintln!("Using Groq provider (API key found)");
-                Box::new(GroqProvider::new(api_key))
-            } else {
-                eprintln!("Using Google provider (no OpenAI/Mistral/Groq API key configured)");
-                Box::new(GoogleProvider::new(
-                    args.google_api_key.clone(),
-                    args.language.clone(),
-                ))
-            };
-            vec![p]
+            // Auto-detect: build a best-effort fallback chain from every provider
+            // that has an API key available, ordered cheapest-first. Google is
+            // always appended last since it has a built-in default key.
+            let mut providers: Vec<Box<dyn TranscriptionProvider>> = Vec::new();
+            if let Some(api_key) = get_groq_api_key(&args) {
+                providers.push(Box::new(GroqProvider::new(api_key)));
+            }
+            if let Some(api_key) = get_openai_api_key(&args) {
+                providers.push(Box::new(OpenAIProvider::new(api_key)));
+            }
+            if let Some(api_key) = get_mistral_api_key(&args) {
+                providers.push(Box::new(MistralProvider::new(api_key)));
+            }
+            providers.push(Box::new(GoogleProvider::new(
+                args.google_api_key.clone(),
+                args.language.clone(),
+            )));
+            let names: Vec<&str> = providers.iter().map(|p| p.name()).collect();
+            eprintln!("Auto-detected provider chain: {}", names.join(" -> "));
+            providers
         }
     };
 
