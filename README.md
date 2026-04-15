@@ -126,7 +126,7 @@ Then run:
 ./rpdictation
 ```
 
-**Note:** If `--provider` is omitted, the provider is auto-detected: OpenAI is used if `OPENAI_API_KEY` is set, otherwise Mistral, Groq, or Google, in that order.
+**Note:** If `--provider` is omitted, rpdictation builds a best-effort fallback chain from every provider whose API key is available, ordered cheapest-first: Groq, then OpenAI, then Mistral. Google is always appended as the final fallback (it works without an API key via the built-in Chromium key).
 
 ### Provider fallback chain
 
