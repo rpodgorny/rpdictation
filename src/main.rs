@@ -40,6 +40,79 @@ async fn send_notification(message: &str, expire: bool) {
         .await;
 }
 
+struct ClipboardSnapshot {
+    mime: String,
+    data: Vec<u8>,
+}
+
+async fn save_selection(primary: bool) -> Option<ClipboardSnapshot> {
+    let mut list_args: Vec<&str> = vec!["--list-types"];
+    if primary {
+        list_args.push("--primary");
+    }
+    let list_out = tokio::process::Command::new("wl-paste")
+        .args(&list_args)
+        .output()
+        .await
+        .ok()?;
+    if !list_out.status.success() {
+        return None;
+    }
+    let mime = String::from_utf8_lossy(&list_out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if mime.is_empty() {
+        return None;
+    }
+
+    let mut read_args: Vec<&str> = vec!["--no-newline", "--type", &mime];
+    if primary {
+        read_args.push("--primary");
+    }
+    let data_out = tokio::process::Command::new("wl-paste")
+        .args(&read_args)
+        .output()
+        .await
+        .ok()?;
+    if !data_out.status.success() {
+        return None;
+    }
+
+    Some(ClipboardSnapshot {
+        mime,
+        data: data_out.stdout,
+    })
+}
+
+async fn restore_selection(primary: bool, snap: Option<ClipboardSnapshot>) -> Result<()> {
+    match snap {
+        Some(s) => {
+            let mut cmd = tokio::process::Command::new("wl-copy");
+            cmd.arg("--type").arg(&s.mime);
+            if primary {
+                cmd.arg("--primary");
+            }
+            cmd.stdin(std::process::Stdio::piped());
+            let mut child = cmd.spawn().context("Failed to spawn wl-copy for restore")?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(&s.data).await.ok();
+            }
+            child.wait().await.context("wl-copy restore failed")?;
+        }
+        None => {
+            let mut cmd = tokio::process::Command::new("wl-copy");
+            cmd.arg("--clear");
+            if primary {
+                cmd.arg("--primary");
+            }
+            cmd.status().await.context("wl-copy --clear failed")?;
+        }
+    }
+    Ok(())
+}
+
 fn get_pid_path() -> PathBuf {
     let uid = nix::unistd::getuid();
     PathBuf::from(format!("/run/user/{}/rpdictation.pid", uid))
@@ -692,6 +765,9 @@ async fn main_async() -> Result<()> {
             match typer.as_str() {
                 "wtype" => {
                     if paste {
+                        let saved_clipboard = save_selection(false).await;
+                        let saved_primary = save_selection(true).await;
+
                         tokio::process::Command::new("wl-copy")
                             .args(["--", &text])
                             .status()
@@ -718,6 +794,11 @@ async fn main_async() -> Result<()> {
                                 .await
                                 .context("Failed to run wtype for Enter")?;
                         }
+
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+                        restore_selection(false, saved_clipboard).await.ok();
+                        restore_selection(true, saved_primary).await.ok();
                     } else {
                         let mut cmd = tokio::process::Command::new("wtype");
                         cmd.arg(&text);
@@ -731,6 +812,9 @@ async fn main_async() -> Result<()> {
                     // Shift+Insert is more universal than Ctrl+V (doesn't work
                     // in all terminals/apps).
                     if paste {
+                        let saved_clipboard = save_selection(false).await;
+                        let saved_primary = save_selection(true).await;
+
                         // Set both CLIPBOARD and PRIMARY selections — Shift+Insert
                         // pastes from PRIMARY in many apps (especially terminals),
                         // while others paste from CLIPBOARD.
@@ -754,6 +838,11 @@ async fn main_async() -> Result<()> {
                             .status()
                             .await
                             .context("Failed to run ydotool key for Shift+Insert paste")?;
+
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+                        restore_selection(false, saved_clipboard).await.ok();
+                        restore_selection(true, saved_primary).await.ok();
                     } else {
                         tokio::process::Command::new("ydotool")
                             .args(["type", "-d", "1", "--", &text])

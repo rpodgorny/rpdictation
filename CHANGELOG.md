@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 ### Fixed
+- `--paste` mode now preserves the user's existing clipboard. The current
+  CLIPBOARD and PRIMARY selections (including non-text MIME types) are
+  snapshotted before the transcription is written, and restored after the
+  Shift+Insert paste has been consumed by the target window. An originally
+  empty selection is cleared via `wl-copy --clear` rather than left holding
+  the transcription.
 
 ### Security
 
