@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 ### Fixed
+
+### Security
+
+## [0.3.0] - 2026-05-12
+
+### Fixed
 - `--paste` mode now preserves the user's existing clipboard. The current
   CLIPBOARD and PRIMARY selections (including non-text MIME types) are
   snapshotted before the transcription is written, and restored after the
@@ -24,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the transcription.
 
 ### Security
+- Updated `rustls-webpki` to 0.103.13 to address RUSTSEC-2026-0104
+  (reachable panic in CRL parsing).
 
 ## [0.2.0] - 2026-04-15
 
